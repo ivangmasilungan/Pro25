@@ -1,15 +1,12 @@
-import React, { useMemo, useState } from "react";
+// App.jsx (Supabase-ready; works without sb but persists if sb is set)
+const { useMemo, useState, useEffect } = React;
 
-// =====================================================
-// Helpers + Smoke Tests (do not modify existing tests t1–t3)
-// =====================================================
+// -- Helpers
 function safeLogoSrc(envUrl, globalUrl) {
   if (globalUrl && typeof globalUrl === "string") return globalUrl;
   if (envUrl && typeof envUrl === "string") return envUrl;
-  return "/sports_logo.jpg"; // default to new uploaded logo
+  return "/sports_logo.jpg";
 }
-
-// Pure helper for team score updates (testable, ES5-safe)
 function nextScore(prev, type, delta) {
   const current = Math.max(0, Number(((prev && prev[type]) != null ? prev[type] : 0)));
   const n = Math.max(0, current + Number(delta || 0));
@@ -19,76 +16,62 @@ function nextScore(prev, type, delta) {
   return out;
 }
 
-// Credentials (mutable for demo-only change password flow)
+// Demo credentials
 let storedUsername = "Admin";
 let storedPassword = "@lum2025!";
 
-// Pure helpers
-function validateCredentials(u, p) {
-  return u === storedUsername && p === storedPassword;
+// ---------- Supabase-aware data helpers ----------
+const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
+const emptyTeams = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
+
+async function sbFetchAll() {
+  if (!window.sb) return null;
+  const [{ data: players }, { data: scores }] = await Promise.all([
+    window.sb.from("players").select("full_name, team, paid").order("full_name", { ascending: true }),
+    window.sb.from("team_scores").select("team, wins, losses")
+  ]);
+  return { players: players || [], scores: scores || [] };
 }
-// =====================================================
-// Login Page
-// =====================================================
-<image
-  src="/sports_logo.jpg"
-  alt="League Logo"
-  className="w-32 h-32 mb-6 object-contain"
-/>
+async function sbUpsertPlayer({ full_name, team=null, paid=false }) {
+  if (!window.sb) return;
+  await window.sb.from("players").upsert({ full_name, team, paid });
+}
+async function sbDeletePlayer(full_name) {
+  if (!window.sb) return;
+  await window.sb.from("players").delete().eq("full_name", full_name);
+}
+async function sbUpdateScore(team, win, lose) {
+  if (!window.sb) return;
+  await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
+}
+
+// ---------- UI ----------
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hideLogo, setHideLogo] = useState(false);
-
   const logoSrc = useMemo(() => {
-    const envUrl =
-      typeof process !== "undefined" && process.env && process.env.VITE_LOGO_URL
-        ? process.env.VITE_LOGO_URL
-        : undefined;
-    const globalUrl =
-      typeof window !== "undefined" && window.__APP_LOGO__
-        ? window.__APP_LOGO__
-        : undefined;
+    const envUrl = (typeof process !== "undefined" && process.env && process.env.VITE_LOGO_URL) ? process.env.VITE_LOGO_URL : undefined;
+    const globalUrl = (typeof window !== "undefined" && window.__APP_LOGO__) ? window.__APP_LOGO__ : undefined;
     return safeLogoSrc(envUrl, globalUrl);
   }, []);
-
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (validateCredentials(username, password)) onLogin(username);
+    if (username === storedUsername && password === storedPassword) onLogin(username);
     else alert("Invalid credentials. Please try again.");
   };
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-200">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md flex flex-col items-center">
         {!hideLogo ? (
-          <img
-            src={logoSrc}
-            alt="League Logo"
-            className="w-32 h-32 mb-6 object-contain"
-            onError={() => setHideLogo(true)}
-          />
+          <img src={logoSrc} alt="League Logo" className="w-32 h-32 mb-6 object-contain" onError={() => setHideLogo(true)} />
         ) : (
-          <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">
-            No Logo
-          </div>
+          <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>
         )}
         <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
         <form onSubmit={handleSubmit} className="space-y-4 w-full">
-          <input
-            type="text"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full border rounded px-3 py-2"
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border rounded px-3 py-2"
-          />
+          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border rounded px-3 py-2" />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border rounded px-3 py-2" />
           <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">Login</button>
         </form>
         <p className="text-xs text-gray-500 mt-4">Created by IGM</p>
@@ -97,39 +80,24 @@ function LoginPage({ onLogin }) {
   );
 }
 
-// =====================================================
-// App Shell
-// =====================================================
-export default function PerpetualGymLeagueApp() {
+function PerpetualGymLeagueApp() {
   const [user, setUser] = useState(null);
   return user ? <PerpetualGymLeague onLogout={() => setUser(null)} /> : <LoginPage onLogin={setUser} />;
 }
 
-// =====================================================
-// Main League Component (restored placeholder UI)
-// =====================================================
 function PerpetualGymLeague({ onLogout }) {
-  const initialIndividuals = [];
-  const initialTeams = { A: [], B: [], C: [], D: [], E: [], F: [], G: [], H: [], I: [], J: [] };
-
-  const [individuals, setIndividuals] = useState(initialIndividuals);
-  const [teams, setTeams] = useState(initialTeams);
+  const [individuals, setIndividuals] = useState([]);
+  const [teams, setTeams] = useState(emptyTeams);
   const [newName, setNewName] = useState("");
-  const [confirmType, setConfirmType] = useState(null); // 'individuals' | 'teams' | 'deleteIndividual'
+  const [confirmType, setConfirmType] = useState(null);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingValue, setEditingValue] = useState("");
   const [paidStatus, setPaidStatus] = useState({});
   const [clearOption, setClearOption] = useState("");
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
-  const [teamScores, setTeamScores] = useState(
-    Object.keys(initialTeams).reduce(function (acc, t) {
-      acc[t] = { win: 0, lose: 0 };
-      return acc;
-    }, {})
-  );
+  const [teamScores, setTeamScores] = useState(TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {}));
 
-  // Change Password modal state
   const [showPwd, setShowPwd] = useState(false);
   const [curPwd, setCurPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
@@ -137,21 +105,47 @@ function PerpetualGymLeague({ onLogout }) {
   const [pwdErrors, setPwdErrors] = useState([]);
   const [pwdSuccess, setPwdSuccess] = useState("");
 
-  const addIndividual = (e) => {
+  useEffect(() => {
+    (async () => {
+      if (!window.sb) return; // in-memory mode if no Supabase
+      const res = await sbFetchAll();
+      if (!res) return;
+      const { players, scores } = res;
+
+      setIndividuals(players.map(p => p.full_name));
+      const teamMap = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
+      players.forEach(p => { if (p.team && teamMap[p.team]) teamMap[p.team].push(p.full_name); });
+      setTeams(teamMap);
+      setPaidStatus(players.reduce((acc,p)=>{acc[p.full_name]=!!p.paid; return acc;}, {}));
+
+      const scoreMap = TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {});
+      (scores||[]).forEach(row => {
+        if (scoreMap[row.team]) scoreMap[row.team] = { win: row.wins||0, lose: row.losses||0 };
+      });
+      setTeamScores(scoreMap);
+    })();
+  }, []);
+
+  function validateNewPassword(current, next1, next2) {
+    const errs = [];
+    if (current !== storedPassword) errs.push("Current password is incorrect.");
+    if (!next1 || next1.length < 8) errs.push("New password must be at least 8 characters.");
+    if (next1 !== next2) errs.push("Passwords do not match.");
+    return errs;
+  }
+
+  const addIndividual = async (e) => {
     e.preventDefault();
     const v = (newName || "").trim();
     if (!v) return;
-    setIndividuals(function (prev) { return prev.concat(v); });
     setNewName("");
+    setIndividuals(prev => prev.concat(v));
+    if (window.sb) await sbUpsertPlayer({ full_name: v, team: null, paid: false });
   };
 
-  const togglePaid = (name) => {
-    setPaidStatus(function (prev) {
-      const out = {};
-      for (const k in prev) out[k] = prev[k];
-      out[name] = !prev[name];
-      return out;
-    });
+  const togglePaid = async (name) => {
+    setPaidStatus(prev => ({ ...prev, [name]: !prev[name] }));
+    if (window.sb) await sbUpsertPlayer({ full_name: name, team: Object.keys(teams).find(t => (teams[t]||[]).includes(name)) || null, paid: !paidStatus[name] });
   };
 
   const cancelClear = () => {
@@ -161,81 +155,92 @@ function PerpetualGymLeague({ onLogout }) {
     setClearOption("");
   };
 
-  const performClear = () => {
+  const performClear = async () => {
     if (confirmType === "individuals") {
+      if (window.sb) {
+        // Truncate by deleting all rows (simple approach)
+        await window.sb.from("players").delete().neq("full_name", "");
+      }
       setIndividuals([]);
+      setPaidStatus({});
+      setTeams(emptyTeams);
     } else if (confirmType === "teams") {
-      setTeams(initialTeams);
+      // Clear assignments but keep individuals
+      const names = [...individuals];
+      setTeams(emptyTeams);
+      if (window.sb) {
+        for (const n of names) await sbUpsertPlayer({ full_name: n, team: null, paid: !!paidStatus[n] });
+      }
     } else if (confirmType === "deleteIndividual" && confirmDeleteIndex !== null) {
       const nameToDelete = individuals[confirmDeleteIndex];
-      setIndividuals(function (prev) { return prev.filter(function (_, i) { return i !== confirmDeleteIndex; }); });
-      setTeams(function (prev) {
+      setIndividuals(prev => prev.filter((_, i) => i !== confirmDeleteIndex));
+      setTeams(prev => {
         const copy = {};
-        Object.keys(prev).forEach(function (t) {
-          const members = prev[t] || [];
-          copy[t] = members.filter(function (m) { return m !== nameToDelete; });
-        });
+        for (const k in prev) copy[k] = prev[k].filter(m => m !== nameToDelete);
         return copy;
       });
-      setPaidStatus(function (prev) {
-        const ns = {};
-        for (const k in prev) if (k !== nameToDelete) ns[k] = prev[k];
+      setPaidStatus(prev => {
+        const ns = { ...prev };
+        delete ns[nameToDelete];
         return ns;
       });
+      if (window.sb) await sbDeletePlayer(nameToDelete);
     }
     cancelClear();
   };
 
-  const moveIndividualToTeam = (name, selectedTeam) => {
-    setTeams(function (prev) {
+  const moveIndividualToTeam = async (name, selectedTeam) => {
+    setTeams(prev => {
       const copy = {};
-      Object.keys(prev).forEach(function (t) {
-        const members = prev[t] || [];
-        copy[t] = members.filter(function (m) { return m !== name; });
+      Object.keys(prev).forEach(t => {
+        copy[t] = (prev[t] || []).filter(m => m !== name);
       });
-      if (!selectedTeam) return copy;
-      if (!copy[selectedTeam]) copy[selectedTeam] = [];
-      if (copy[selectedTeam].length < 15 && copy[selectedTeam].indexOf(name) === -1) copy[selectedTeam].push(name);
-      else if (copy[selectedTeam].length >= 15) alert("Team " + selectedTeam + " is already full.");
+      if (selectedTeam) {
+        copy[selectedTeam] = copy[selectedTeam] || [];
+        if (copy[selectedTeam].length < 15 && copy[selectedTeam].indexOf(name) === -1) copy[selectedTeam].push(name);
+        else if (copy[selectedTeam].length >= 15) alert("Team " + selectedTeam + " is already full.");
+      }
       return copy;
     });
+    if (window.sb) await sbUpsertPlayer({ full_name: name, team: selectedTeam || null, paid: !!paidStatus[name] });
   };
 
   const startEditing = (idx, currentValue) => { setEditingIndex(idx); setEditingValue(currentValue); };
-
-  const saveEdit = (idx) => {
+  const saveEdit = async (idx) => {
     const v = (editingValue || "").trim();
     if (!v) return;
     const oldValue = individuals[idx];
-    setIndividuals(function (prev) { return prev.map(function (n, i) { return i === idx ? v : n; }); });
-    setTeams(function (prev) {
+    setIndividuals(prev => prev.map((n, i) => (i === idx ? v : n)));
+    setTeams(prev => {
       const copy = {};
-      Object.keys(prev).forEach(function (t) {
-        const members = prev[t] || [];
-        copy[t] = members.map(function (m) { return m === oldValue ? v : m; });
+      Object.keys(prev).forEach(t => {
+        copy[t] = (prev[t] || []).map(m => (m === oldValue ? v : m));
       });
       return copy;
     });
-    setPaidStatus(function (prev) {
-      const ns = {};
-      for (const k in prev) ns[k] = prev[k];
+    setPaidStatus(prev => {
+      const ns = { ...prev };
       if (prev[oldValue]) ns[v] = true;
       delete ns[oldValue];
       return ns;
     });
     setEditingIndex(null);
     setEditingValue("");
+    if (window.sb) {
+      await sbDeletePlayer(oldValue);
+      await sbUpsertPlayer({ full_name: v, team: Object.keys(teams).find(t => (teams[t]||[]).includes(v)) || null, paid: !!paidStatus[v] });
+    }
   };
 
   const requestDeleteIndividual = (idx) => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); };
 
-  const removeFromTeam = (team, member) => {
-    setTeams(function (prev) {
-      const copy = {};
-      for (const k in prev) copy[k] = prev[k];
-      copy[team] = (copy[team] || []).filter(function (m) { return m !== member; });
+  const removeFromTeam = async (team, member) => {
+    setTeams(prev => {
+      const copy = { ...prev };
+      copy[team] = (copy[team] || []).filter(m => m !== member);
       return copy;
     });
+    if (window.sb) await sbUpsertPlayer({ full_name: member, team: null, paid: !!paidStatus[member] });
   };
 
   const handleClearSelection = () => {
@@ -244,22 +249,30 @@ function PerpetualGymLeague({ onLogout }) {
     if (clearOption) setAwaitingConfirm(true);
   };
 
-  const resetScores = (team) => {
-    setTeamScores(function (prev) { const out = {}; for (const k in prev) out[k] = prev[k]; out[team] = { win: 0, lose: 0 }; return out; });
+  const resetScores = async (team) => {
+    setTeamScores(prev => ({ ...prev, [team]: { win: 0, lose: 0 } }));
+    if (window.sb) await sbUpdateScore(team, 0, 0);
   };
 
-  const updateScore = (team, type, delta) => {
-    setTeamScores(function (prev) { const out = {}; for (const k in prev) out[k] = prev[k]; out[team] = nextScore(prev[team], type, delta); return out; });
+  const updateScore = async (team, type, delta) => {
+    setTeamScores(prev => {
+      const out = { ...prev };
+      out[team] = nextScore(prev[team], type, delta);
+      return out;
+    });
+    const ns = (t) => teamScores[t] ? teamScores[t] : { win: 0, lose: 0 };
+    const cur = ns(team);
+    const newVals = type === "win" ? { win: Math.max(0, cur.win + delta), lose: cur.lose } : { win: cur.win, lose: Math.max(0, cur.lose + delta) };
+    if (window.sb) await sbUpdateScore(team, newVals.win, newVals.lose);
   };
 
-  // Change Password handlers
   const openChangePassword = () => { setShowPwd(true); setPwdErrors([]); setPwdSuccess(""); setCurPwd(""); setNewPwd(""); setNewPwd2(""); };
   const closeChangePassword = () => { setShowPwd(false); setPwdErrors([]); setPwdSuccess(""); };
   const submitChangePassword = (e) => {
     e.preventDefault();
     const errs = validateNewPassword(curPwd, newPwd, newPwd2);
     if (errs.length) { setPwdErrors(errs); setPwdSuccess(""); return; }
-    storedPassword = newPwd; // demo in-memory update
+    storedPassword = newPwd;
     setPwdErrors([]);
     setPwdSuccess("Password updated successfully.");
     setTimeout(() => { closeChangePassword(); }, 800);
@@ -269,24 +282,23 @@ function PerpetualGymLeague({ onLogout }) {
     <div className="min-h-screen bg-gray-100 p-6 flex flex-col">
       <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 flex-1">
         <h1 className="text-2xl font-bold mb-4 text-center">Perpetual Alumni Mini League</h1>
+        {!window.sb && (
+          <div className="mb-4 text-sm text-yellow-800 bg-yellow-50 border border-yellow-200 rounded p-2">
+            Running in in-memory mode. Edit <code>config-supabase.js</code> with your Supabase URL and anon key to persist data.
+          </div>
+        )}
 
         <p className="mb-2 text-gray-600 text-lg font-bold text-center">Total Registered Players: {individuals.length}</p>
-        <h2 className="text-xl font-semibold mt-6 mb-2">Player's Full name</h2>
+        <h2 className="text-xl font-semibold mt-6 mb-2">Player&#39;s Full name</h2>
 
         <form onSubmit={addIndividual} className="flex gap-2 mb-4">
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Enter full name"
-            className="flex-1 border rounded px-3 py-2"
-          />
+          <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Enter full name" className="flex-1 border rounded px-3 py-2" />
           <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Add</button>
         </form>
 
         <ol className="list-decimal list-inside space-y-2">
-          {individuals.map(function (name, idx) {
-            const assigned = (function () {
+          {individuals.map((name, idx) => {
+            const assigned = (() => {
               for (const t in teams) { if ((teams[t] || []).indexOf(name) !== -1) return t; }
               return "";
             })();
@@ -294,14 +306,7 @@ function PerpetualGymLeague({ onLogout }) {
               <li key={idx} className="flex items-center gap-4">
                 {editingIndex === idx ? (
                   <>
-                    <input
-                      type="text"
-                      value={editingValue}
-                      onChange={(e) => setEditingValue(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && saveEdit(idx)}
-                      className="border rounded px-2 py-1"
-                      autoFocus
-                    />
+                    <input type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit(idx)} className="border rounded px-2 py-1" autoFocus />
                     <button onClick={() => saveEdit(idx)} className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
                     <button onClick={() => { setEditingIndex(null); setEditingValue(""); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
                   </>
@@ -312,24 +317,18 @@ function PerpetualGymLeague({ onLogout }) {
                   </span>
                 )}
 
-                <select
-                  value={assigned}
-                  onChange={(e) => moveIndividualToTeam(name, e.target.value)}
-                  className="border rounded px-2 py-1"
-                >
+                <select value={assigned} onChange={(e) => moveIndividualToTeam(name, e.target.value)} className="border rounded px-2 py-1">
                   <option value="">No Team</option>
-                  {Object.keys(initialTeams).map(function (key) { return (
-                    <option key={key} value={key}>Team {key}</option>
-                  );})}
+                  {TEAMS.map((key) => <option key={key} value={key}>Team {key}</option>)}
                 </select>
 
                 {editingIndex === idx ? null : (
                   <>
-                    <button onClick={() => togglePaid(name)} className={"px-2 py-1 rounded " + (paidStatus[name] ? "bg-green-700" : "bg-green-500") + " text-white"}>
+                    <button onClick={() => togglePaid(name)} className={`px-2 py-1 rounded ${paidStatus[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
                       {paidStatus[name] ? "Unmark Paid" : "Mark Paid"}
                     </button>
                     <button onClick={() => startEditing(idx, name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
-                    <button onClick={() => requestDeleteIndividual(idx)} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
+                    <button onClick={() => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); }} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
                   </>
                 )}
               </li>
@@ -337,7 +336,7 @@ function PerpetualGymLeague({ onLogout }) {
           })}
         </ol>
 
-        {Object.keys(teams).map(function (team) {
+        {Object.keys(teams).map((team) => {
           const members = teams[team] || [];
           return (
             <div key={team}>
@@ -358,7 +357,7 @@ function PerpetualGymLeague({ onLogout }) {
                 {members.length === 0 ? (
                   <li className="text-gray-400">No players</li>
                 ) : (
-                  members.map(function (member, idx) { return (
+                  members.map((member, idx) => (
                     <li key={idx} className="flex items-center gap-2">
                       <span className="font-medium">{idx + 1}.</span>
                       <span className="flex-1">
@@ -367,7 +366,7 @@ function PerpetualGymLeague({ onLogout }) {
                       </span>
                       <button onClick={() => removeFromTeam(team, member)} className="px-2 py-1 bg-red-500 text-white rounded">Remove</button>
                     </li>
-                  );})
+                  ))
                 )}
               </ul>
             </div>
@@ -375,11 +374,7 @@ function PerpetualGymLeague({ onLogout }) {
         })}
 
         <div className="mt-6 flex items-center gap-2">
-          <select
-            value={clearOption}
-            onChange={(e) => setClearOption(e.target.value)}
-            className="border rounded px-3 py-2"
-          >
+          <select value={clearOption} onChange={(e) => setClearOption(e.target.value)} className="border rounded px-3 py-2">
             <option value="">Select Clear Option</option>
             <option value="individuals">Clear Individuals</option>
             <option value="teams">Clear Teams</option>
@@ -390,18 +385,18 @@ function PerpetualGymLeague({ onLogout }) {
 
       <div className="max-w-4xl mx-auto mt-4 text-center flex items-center justify-center gap-2">
         <button onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded">Logout</button>
-        <button onClick={openChangePassword} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
+        <button onClick={() => setShowPwd(true)} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
       </div>
 
       {showPwd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40" onClick={closeChangePassword} />
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => setShowPwd(false)} />
           <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
             <h3 className="text-lg font-semibold mb-4">Change Password</h3>
             {pwdErrors.length > 0 && (
               <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
                 <ul className="list-disc list-inside">
-                  {pwdErrors.map(function (e, i) { return <li key={i}>{e}</li>; })}
+                  {pwdErrors.map((e, i) => <li key={i}>{e}</li>)}
                 </ul>
               </div>
             )}
@@ -422,7 +417,7 @@ function PerpetualGymLeague({ onLogout }) {
                 <input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} className="w-full border rounded px-3 py-2" />
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={closeChangePassword} className="px-4 py-2 border rounded">Cancel</button>
+                <button type="button" onClick={() => setShowPwd(false)} className="px-4 py-2 border rounded">Cancel</button>
                 <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Save</button>
               </div>
             </form>
@@ -432,18 +427,28 @@ function PerpetualGymLeague({ onLogout }) {
 
       {confirmType && awaitingConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40" onClick={cancelClear} />
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => {
+            setConfirmType(null);
+            setConfirmDeleteIndex(null);
+            setAwaitingConfirm(false);
+            setClearOption("");
+          }} />
           <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-2">⚠️ Final Action</h3>
+            <h3 className="text-lg font-semibold mb-2">Final Action</h3>
             <p className="mb-4">
               {confirmType === "individuals"
-                ? "Are you sure you want to clear ALL individual registrations? This cannot be undone."
+                ? "Clear ALL individual registrations?"
                 : confirmType === "teams"
-                ? "Are you sure you want to clear ALL team rosters? This cannot be undone."
-                : "Are you sure you want to delete this individual? This cannot be undone."}
+                ? "Clear ALL team rosters?"
+                : "Delete this individual?"}
             </p>
             <div className="flex justify-end gap-2">
-              <button onClick={cancelClear} className="px-4 py-2 border rounded">Cancel</button>
+              <button onClick={() => {
+                setConfirmType(null);
+                setConfirmDeleteIndex(null);
+                setAwaitingConfirm(false);
+                setClearOption("");
+              }} className="px-4 py-2 border rounded">Cancel</button>
               <button onClick={performClear} className="px-4 py-2 bg-red-600 text-white rounded">Confirm</button>
             </div>
           </div>
@@ -452,3 +457,7 @@ function PerpetualGymLeague({ onLogout }) {
     </div>
   );
 }
+
+// Mount
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<PerpetualGymLeagueApp />);
