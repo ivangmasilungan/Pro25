@@ -1,7 +1,7 @@
-import "./lib/supabase.js";      // sets window.sb
+// src/main.jsx
+import "./lib/supabase.js";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
-import "./index.css";            // ok if empty or Tailwind
-
+import "./index.css";
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
