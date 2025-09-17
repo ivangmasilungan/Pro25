@@ -18,15 +18,11 @@ function delCookie(name) {
   try { document.cookie = `${name}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`; } catch {}
 }
 
-/** Unified auth hook: tries cookie first, then localStorage. */
+/** Read synchronously on first render (no flicker). */
 function useAuthUser() {
   const [user, setUser] = useState(() => {
-    // initial read synchronously (no flicker)
     try {
-      const c = getCookie("auth_user");
-      if (c) return c;
-      const ls = localStorage.getItem("auth_user");
-      return ls ?? null;
+      return getCookie("auth_user") || localStorage.getItem("auth_user") || null;
     } catch { return null; }
   });
 
@@ -42,7 +38,7 @@ function useAuthUser() {
     setUser(null);
   };
 
-  // keep multiple tabs/windows in sync via storage events
+  // keep multiple tabs/windows in sync
   useEffect(() => {
     const onStorage = (e) => {
       if (e.key === "auth_user") setUser(e.newValue);
@@ -54,7 +50,7 @@ function useAuthUser() {
   return { user, login, logout };
 }
 
-/* ================================== Helpers ================================== */
+/* -------------------------------- Helpers -------------------------------- */
 function safeLogoSrc(envUrl, globalUrl) {
   if (globalUrl && typeof globalUrl === "string") return globalUrl;
   if (envUrl && typeof envUrl === "string") return envUrl;
@@ -66,11 +62,11 @@ function nextScore(prev, type, delta) {
   return { ...prev, [type]: n };
 }
 
-/* ============================= Demo credentials ============================== */
+/* ---------------------------- Demo credentials ---------------------------- */
 let storedUsername = "Admin";
 let storedPassword = "@lum2025!";
 
-/* ======================= Supabase-aware data helpers ======================== */
+/* ------------------------ Supabase-aware data helpers --------------------- */
 const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
 
@@ -95,7 +91,7 @@ async function sbUpdateScore(team, win, lose) {
   await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
 }
 
-/* ==================================== UI ==================================== */
+/* ---------------------------------- UI ----------------------------------- */
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -331,8 +327,8 @@ function PerpetualGymLeague({ onLogout }) {
                 {editingIndex === idx ? (
                   <>
                     <input type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit(idx)} className="border rounded px-2 py-1" autoFocus />
-                    <button onClick={() => saveEdit(idx)} className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
-                    <button onClick={() => { setEditingIndex(null); setEditingValue(""); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
+                    <button type="button" onClick={() => saveEdit(idx)} className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
+                    <button type="button" onClick={() => { setEditingIndex(null); setEditingValue(""); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
                   </>
                 ) : (
                   <span className="flex-1 font-medium text-left">
@@ -348,11 +344,11 @@ function PerpetualGymLeague({ onLogout }) {
 
                 {editingIndex === idx ? null : (
                   <>
-                    <button onClick={() => togglePaid(name)} className={`px-2 py-1 rounded ${paidStatus[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
+                    <button type="button" onClick={() => setEditingIndex(idx) || setEditingValue(name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
+                    <button type="button" onClick={() => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); }} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
+                    <button type="button" onClick={() => togglePaid(name)} className={`px-2 py-1 rounded ${paidStatus[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
                       {paidStatus[name] ? "Unmark Paid" : "Mark Paid"}
                     </button>
-                    <button onClick={() => startEditing(idx, name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
-                    <button onClick={() => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); }} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
                   </>
                 )}
               </li>
@@ -373,11 +369,11 @@ function PerpetualGymLeague({ onLogout }) {
                 </span>
               </h2>
               <div className="flex gap-2 mb-2">
-                <button onClick={() => updateScore(team, "win", 1)} className="px-2 py-1 border rounded">+W</button>
-                <button onClick={() => updateScore(team, "win", -1)} className="px-2 py-1 border rounded">-W</button>
-                <button onClick={() => updateScore(team, "lose", 1)} className="px-2 py-1 border rounded">+L</button>
-                <button onClick={() => updateScore(team, "lose", -1)} className="px-2 py-1 border rounded">-L</button>
-                <button onClick={() => resetScores(team)} className="px-2 py-1 border rounded">Reset</button>
+                <button type="button" onClick={() => updateScore(team, "win", 1)} className="px-2 py-1 border rounded">+W</button>
+                <button type="button" onClick={() => updateScore(team, "win", -1)} className="px-2 py-1 border rounded">-W</button>
+                <button type="button" onClick={() => updateScore(team, "lose", 1)} className="px-2 py-1 border rounded">+L</button>
+                <button type="button" onClick={() => updateScore(team, "lose", -1)} className="px-2 py-1 border rounded">-L</button>
+                <button type="button" onClick={() => resetScores(team)} className="px-2 py-1 border rounded">Reset</button>
               </div>
               <ul className="list-inside space-y-1">
                 {members.length === 0 ? (
@@ -390,7 +386,7 @@ function PerpetualGymLeague({ onLogout }) {
                         {member}
                         {paidStatus[member] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
                       </span>
-                      <button onClick={() => removeFromTeam(team, member)} className="px-2 py-1 bg-red-500 text-white rounded">Remove</button>
+                      <button type="button" onClick={() => removeFromTeam(team, member)} className="px-2 py-1 bg-red-500 text-white rounded">Remove</button>
                     </li>
                   ))
                 )}
@@ -405,19 +401,40 @@ function PerpetualGymLeague({ onLogout }) {
             <option value="individuals">Clear Individuals</option>
             <option value="teams">Clear Teams</option>
           </select>
-          <button onClick={handleClearSelection} className="px-4 py-2 text-black border rounded">❌</button>
+          <button type="button" onClick={handleClearSelection} className="px-4 py-2 text-black border rounded">❌</button>
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto mt-4 text-center flex items-center justify-center gap-2">
-        <button onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded">Logout</button>
-        <button onClick={() => setShowPwd(true)} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
+        <button type="button" onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded">Logout</button>
+        <button type="button" onClick={() => setShowPwd(true)} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
       </div>
+
+      {/* ===== Delete / Clear Modals (z-index fixed) ===== */}
+      {confirmType && awaitingConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black opacity-40 z-40" onClick={cancelClear} />
+          <div className="relative bg-white rounded-lg shadow-lg p-6 z-50 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold mb-2">Final Action</h3>
+            <p className="mb-4">
+              {confirmType === "individuals"
+                ? "Clear ALL individual registrations?"
+                : confirmType === "teams"
+                ? "Clear ALL team rosters?"
+                : "Delete this individual?"}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={cancelClear} className="px-4 py-2 border rounded">Cancel</button>
+              <button type="button" onClick={performClear} className="px-4 py-2 bg-red-600 text-white rounded">Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPwd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40" onClick={() => setShowPwd(false)} />
-          <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
+          <div className="absolute inset-0 bg-black opacity-40 z-40" onClick={() => setShowPwd(false)} />
+          <div className="relative bg-white rounded-lg shadow-lg p-6 z-50 w-full max-w-md mx-4">
             <h3 className="text-lg font-semibold mb-4">Change Password</h3>
             {pwdErrors.length > 0 && (
               <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
@@ -450,35 +467,11 @@ function PerpetualGymLeague({ onLogout }) {
           </div>
         </div>
       )}
-
-      {confirmType && awaitingConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40" onClick={() => {
-            setConfirmType(null); setConfirmDeleteIndex(null); setAwaitingConfirm(false); setClearOption("");
-          }} />
-          <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-2">Final Action</h3>
-            <p className="mb-4">
-              {confirmType === "individuals"
-                ? "Clear ALL individual registrations?"
-                : confirmType === "teams"
-                ? "Clear ALL team rosters?"
-                : "Delete this individual?"}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => {
-                setConfirmType(null); setConfirmDeleteIndex(null); setAwaitingConfirm(false); setClearOption("");
-              }} className="px-4 py-2 border rounded">Cancel</button>
-              <button onClick={performClear} className="px-4 py-2 bg-red-600 text-white rounded">Confirm</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-/* =============================== Entry wrapper =============================== */
+/* ------------------------------ Entry wrapper ----------------------------- */
 export default function App() {
   return <PerpetualGymLeagueApp />;
 }
