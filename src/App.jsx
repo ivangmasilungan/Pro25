@@ -1,272 +1,429 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useState } from "react";
 
-/* ---------- Auth (localStorage + cookie) ---------- */
-function setCookie(n,v,d=365){try{document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}catch{}}
-function getCookie(n){try{const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null;}catch{return null;}}
-function delCookie(n){try{document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`;}catch{}}
-function useAuthUser(){
-  const [user,setUser]=useState(()=>getCookie("auth_user")||localStorage.getItem("auth_user")||null);
-  const login=(name)=>{try{localStorage.setItem("auth_user",name);}catch{};setCookie("auth_user",name);setUser(name);};
-  const logout=()=>{try{localStorage.removeItem("auth_user");}catch{};delCookie("auth_user");setUser(null);};
-  useEffect(()=>{const onStorage=e=>{if(e.key==="auth_user") setUser(e.newValue)};window.addEventListener("storage",onStorage);return()=>window.removeEventListener("storage",onStorage)},[]);
-  return {user,login,logout};
+// ---------- Helpers ----------
+function safeLogoSrc(envUrl, globalUrl) {
+  if (globalUrl && typeof globalUrl === "string") return globalUrl;
+  if (envUrl && typeof envUrl === "string") return envUrl;
+  return "/sports_logo.jpg";
+}
+function nextScore(prev, type, delta) {
+  const current = Math.max(0, Number(prev?.[type] ?? 0));
+  const n = Math.max(0, current + Number(delta || 0));
+  return { ...prev, [type]: n };
 }
 
-/* ---------- Local cache (keeps data on refresh) ---------- */
-const LS_KEY="paml:v1";
-const loadLocal=()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null;}};
-const saveLocal=(state)=>{try{localStorage.setItem(LS_KEY, JSON.stringify(state));}catch{}};
+// Demo credentials
+let storedUsername = "Admin";
+let storedPassword = "@lum2025!";
 
-/* ---------- Helpers ---------- */
-const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
-const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-const safeLogoSrc=(envUrl,globalUrl)=>globalUrl||envUrl||"/sports_logo.jpg";
-const nextScore=(prev,type,delta)=>{const c=Math.max(0,Number(prev?.[type]??0));const n=Math.max(0,c+Number(delta||0));return {...prev,[type]:n};};
+// ---------- Supabase-aware data helpers ----------
+const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
+const emptyTeams = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
 
-/* ---------- Demo creds ---------- */
-let storedUsername="Admin";
-let storedPassword="@lum2025!";
-
-/* ---------- Supabase helpers (only used if window.sb exists) ---------- */
-async function sbFetchAll(){
-  if(!window.sb) return null;
-  const [{data:players},{data:scores}] = await Promise.all([
-    window.sb.from("players").select("full_name,team,paid").order("full_name",{ascending:true}),
-    window.sb.from("team_scores").select("team,wins,losses"),
+async function sbFetchAll() {
+  if (!window.sb) return null;
+  const [{ data: players }, { data: scores }] = await Promise.all([
+    window.sb.from("players").select("full_name, team, paid").order("full_name", { ascending: true }),
+    window.sb.from("team_scores").select("team, wins, losses"),
   ]);
-  return {players:players||[],scores:scores||[]};
+  return { players: players || [], scores: scores || [] };
 }
-async function sbUpsertPlayer({full_name,team=null,paid=false}){ if(!window.sb) return; await window.sb.from("players").upsert({full_name,team,paid});}
-async function sbDeletePlayer(full_name){ if(!window.sb) return; await window.sb.from("players").delete().eq("full_name",full_name);}
-async function sbUpdateScore(team,win,lose){ if(!window.sb) return; await window.sb.from("team_scores").upsert({team,wins:win,losses:lose},{onConflict:"team"});}
+async function sbUpsertPlayer({ full_name, team=null, paid=false }) {
+  if (!window.sb) return;
+  await window.sb.from("players").upsert({ full_name, team, paid });
+}
+async function sbDeletePlayer(full_name) {
+  if (!window.sb) return;
+  await window.sb.from("players").delete().eq("full_name", full_name);
+}
+async function sbUpdateScore(team, win, lose) {
+  if (!window.sb) return;
+  await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
+}
 
-/* ------------------------------------ UI ----------------------------------- */
-function LoginPage({onLogin}){
-  const [u,setU]=useState(""); const [p,setP]=useState(""); const [hideLogo,setHideLogo]=useState(false);
-  const logoSrc=useMemo(()=>safeLogoSrc(import.meta.env?.VITE_LOGO_URL, typeof window!=="undefined"?window.__APP_LOGO__:undefined),[]);
-  const submit=(e)=>{e.preventDefault(); if(u===storedUsername && p===storedPassword) onLogin(u); else alert("Invalid");};
-  return(
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
-      <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-lg flex flex-col items-center">
-        {!hideLogo?<img src={logoSrc} alt="Logo" className="w-28 h-28 mb-6 object-contain" onError={()=>setHideLogo(true)} />:
-          <div className="w-28 h-28 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>}
-        <h1 className="text-2xl font-bold mb-6">Login</h1>
-        <form onSubmit={submit} className="space-y-4 w-full">
-          <input className="w-full border rounded-lg px-3 py-2" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
-          <input className="w-full border rounded-lg px-3 py-2" placeholder="Password" type="password" value={p} onChange={e=>setP(e.target.value)} />
-          <button className="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">Login</button>
+// ---------- UI ----------
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [hideLogo, setHideLogo] = useState(false);
+  const logoSrc = useMemo(() => {
+    const envUrl = import.meta.env?.VITE_LOGO_URL;
+    const globalUrl = (typeof window !== "undefined" && window.__APP_LOGO__) ? window.__APP_LOGO__ : undefined;
+    return safeLogoSrc(envUrl, globalUrl);
+  }, []);
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (username === storedUsername && password === storedPassword) onLogin(username);
+    else alert("Invalid credentials. Please try again.");
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-200">
+      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md flex flex-col items-center">
+        {!hideLogo ? (
+          <img src={logoSrc} alt="League Logo" className="w-32 h-32 mb-6 object-contain" onError={() => setHideLogo(true)} />
+        ) : (
+          <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>
+        )}
+        <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
+        <form onSubmit={handleSubmit} className="space-y-4 w-full">
+          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border rounded px-3 py-2" />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border rounded px-3 py-2" />
+          <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">Login</button>
         </form>
+        <p className="text-xs text-gray-500 mt-4">Created by IGM</p>
       </div>
     </div>
   );
 }
 
-function PerpetualGymLeagueApp(){ const {user,login,logout}=useAuthUser(); return user?<PerpetualGymLeague onLogout={logout}/>:<LoginPage onLogin={login}/>; }
-export default function App(){ return <PerpetualGymLeagueApp/>; }
+function PerpetualGymLeagueApp() {
+  const [user, setUser] = useState(null);
+  return user ? <PerpetualGymLeague onLogout={() => setUser(null)} /> : <LoginPage onLogin={setUser} />;
+}
 
-function PerpetualGymLeague({onLogout}){
-  const [individuals,setIndividuals]=useState([]);
-  const [teams,setTeams]=useState(emptyTeams);
-  const [paid,setPaid]=useState({});
-  const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
-  const [newName,setNewName]=useState("");
+function PerpetualGymLeague({ onLogout }) {
+  const [individuals, setIndividuals] = useState([]);
+  const [teams, setTeams] = useState(emptyTeams);
+  const [newName, setNewName] = useState("");
+  const [confirmType, setConfirmType] = useState(null);
+  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editingValue, setEditingValue] = useState("");
+  const [paidStatus, setPaidStatus] = useState({});
+  const [clearOption, setClearOption] = useState("");
+  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [teamScores, setTeamScores] = useState(TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {}));
 
-  // confirm delete by NAME
-  const [confirmType,setConfirmType]=useState(null);
-  const [confirmDeleteName,setConfirmDeleteName]=useState(null);
-  const [awaitingConfirm,setAwaitingConfirm]=useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+  const [curPwd, setCurPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [newPwd2, setNewPwd2] = useState("");
+  const [pwdErrors, setPwdErrors] = useState([]);
+  const [pwdSuccess, setPwdSuccess] = useState("");
 
-  // edit state
-  const [editingIndex,setEditingIndex]=useState(null);
-  const [editingValue,setEditingValue]=useState("");
+  useEffect(() => {
+    (async () => {
+      if (!window.sb) return; // in-memory mode if no Supabase
+      const res = await sbFetchAll();
+      if (!res) return;
+      const { players, scores } = res;
 
-  // LOAD (Supabase if available; else localStorage)
-  useEffect(()=>{(async()=>{
-      if(window.sb){
-        const res=await sbFetchAll(); if(!res) return;
-        const {players,scores:ts}=res;
-        setIndividuals(players.map(p=>p.full_name));
-        const tmap=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-        players.forEach(p=>{ if(p.team && tmap[p.team]) tmap[p.team].push(p.full_name);});
-        setTeams(tmap);
-        setPaid(players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}));
-        const smap=TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{});
-        (ts||[]).forEach(r=>{ if(smap[r.team]) smap[r.team]={win:r.wins||0,lose:r.losses||0};});
-        setScores(smap);
-      }else{
-        const s=loadLocal();
-        if(s){ setIndividuals(s.individuals||[]); setTeams(s.teams||emptyTeams); setPaid(s.paid||{}); setScores(s.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{})); }
+      setIndividuals(players.map(p => p.full_name));
+      const teamMap = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
+      players.forEach(p => { if (p.team && teamMap[p.team]) teamMap[p.team].push(p.full_name); });
+      setTeams(teamMap);
+      setPaidStatus(players.reduce((acc,p)=>{acc[p.full_name]=!!p.paid; return acc;}, {}));
+
+      const scoreMap = TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {});
+      (scores||[]).forEach(row => {
+        if (scoreMap[row.team]) scoreMap[row.team] = { win: row.wins||0, lose: row.losses||0 };
+      });
+      setTeamScores(scoreMap);
+    })();
+  }, []);
+
+  function validateNewPassword(current, next1, next2) {
+    const errs = [];
+    if (current !== storedPassword) errs.push("Current password is incorrect.");
+    if (!next1 || next1.length < 8) errs.push("New password must be at least 8 characters.");
+    if (next1 !== next2) errs.push("Passwords do not match.");
+    return errs;
+  }
+
+  const addIndividual = async (e) => {
+    e.preventDefault();
+    const v = (newName || "").trim();
+    if (!v) return;
+    setNewName("");
+    setIndividuals(prev => prev.concat(v));
+    if (window.sb) await sbUpsertPlayer({ full_name: v, team: null, paid: false });
+  };
+
+  const togglePaid = async (name) => {
+    setPaidStatus(prev => ({ ...prev, [name]: !prev[name] }));
+    if (window.sb) {
+      const team = Object.keys(teams).find(t => (teams[t]||[]).includes(name)) || null;
+      await sbUpsertPlayer({ full_name: name, team, paid: !paidStatus[name] });
+    }
+  };
+
+  const cancelClear = () => {
+    setConfirmType(null);
+    setConfirmDeleteIndex(null);
+    setAwaitingConfirm(false);
+    setClearOption("");
+  };
+
+  const performClear = async () => {
+    if (confirmType === "individuals") {
+      if (window.sb) await window.sb.from("players").delete().neq("full_name", "");
+      setIndividuals([]); setPaidStatus({}); setTeams(emptyTeams);
+    } else if (confirmType === "teams") {
+      const names = [...individuals];
+      setTeams(emptyTeams);
+      if (window.sb) for (const n of names) await sbUpsertPlayer({ full_name: n, team: null, paid: !!paidStatus[n] });
+    } else if (confirmType === "deleteIndividual" && confirmDeleteIndex !== null) {
+      const nameToDelete = individuals[confirmDeleteIndex];
+      setIndividuals(prev => prev.filter((_, i) => i !== confirmDeleteIndex));
+      setTeams(prev => {
+        const copy = {};
+        for (const k in prev) copy[k] = prev[k].filter(m => m !== nameToDelete);
+        return copy;
+      });
+      setPaidStatus(prev => {
+        const ns = { ...prev }; delete ns[nameToDelete]; return ns;
+      });
+      if (window.sb) await sbDeletePlayer(nameToDelete);
+    }
+    cancelClear();
+  };
+
+  const moveIndividualToTeam = async (name, selectedTeam) => {
+    setTeams(prev => {
+      const copy = {};
+      Object.keys(prev).forEach(t => { copy[t] = (prev[t] || []).filter(m => m !== name); });
+      if (selectedTeam) {
+        copy[selectedTeam] = copy[selectedTeam] || [];
+        if (copy[selectedTeam].length < 15 && !copy[selectedTeam].includes(name)) copy[selectedTeam].push(name);
+        else if (copy[selectedTeam].length >= 15) alert("Team " + selectedTeam + " is already full.");
       }
-  })();},[]);
-
-  // SAVE to localStorage
-  useEffect(()=>{ saveLocal({individuals,teams,paid,scores}); },[individuals,teams,paid,scores]);
-
-  /* ---- actions ---- */
-  const add=async(e)=>{e.preventDefault();const v=newName.trim();if(!v)return;setNewName("");setIndividuals(p=>p.concat(v)); if(window.sb) await sbUpsertPlayer({full_name:v,team:null,paid:false});};
-
-  const assign=async(name,team)=>{
-    setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,arr])=>[k,arr.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;});
-    if(window.sb) await sbUpsertPlayer({full_name:name,team,paid:!!paid[name]});
+      return copy;
+    });
+    if (window.sb) await sbUpsertPlayer({ full_name: name, team: selectedTeam || null, paid: !!paidStatus[name] });
   };
 
-  const markPaid=async(name)=>{
-    setPaid(prev=>({...prev,[name]:!prev[name]}));
-    if(window.sb) await sbUpsertPlayer({full_name:name,team:Object.keys(teams).find(t=>teams[t].includes(name))||null,paid:!paid[name]});
-  };
-
-  const updateScore=async(team,type,delta)=>{
-    setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
-    const cur=scores[team]||{win:0,lose:0};
-    const nv=type==="win"?{win:Math.max(0,cur.win+delta),lose:cur.lose}:{win:cur.win,lose:Math.max(0,cur.lose+delta)};
-    if(window.sb) await sbUpdateScore(team,nv.win,nv.lose);
-  };
-
-  const startEditing=(i,current)=>{setEditingIndex(i);setEditingValue(current);};
-  const saveEdit=async(i)=>{
-    const v=(editingValue||"").trim(); if(!v) return;
-    const old=individuals[i];
-    setIndividuals(prev=>prev.map((n,idx)=>idx===i?v:n));
-    setTeams(prev=>{const copy={}; for(const k in prev) copy[k]=(prev[k]||[]).map(m=>m===old?v:m); return copy;});
-    setPaid(prev=>{const ns={...prev}; if(prev[old]) ns[v]=true; delete ns[old]; return ns;});
+  const startEditing = (idx, currentValue) => { setEditingIndex(idx); setEditingValue(currentValue); };
+  const saveEdit = async (idx) => {
+    const v = (editingValue || "").trim(); if (!v) return;
+    const oldValue = individuals[idx];
+    setIndividuals(prev => prev.map((n, i) => (i === idx ? v : n)));
+    setTeams(prev => {
+      const copy = {};
+      Object.keys(prev).forEach(t => { copy[t] = (prev[t] || []).map(m => (m === oldValue ? v : m)); });
+      return copy;
+    });
+    setPaidStatus(prev => {
+      const ns = { ...prev };
+      if (prev[oldValue]) ns[v] = true;
+      delete ns[oldValue];
+      return ns;
+    });
     setEditingIndex(null); setEditingValue("");
-    if(window.sb){ await sbDeletePlayer(old); const t=Object.keys(teams).find(tt=>(teams[tt]||[]).includes(v))||null; await sbUpsertPlayer({full_name:v,team:t,paid:!!paid[v]});}
+    if (window.sb) {
+      await sbDeletePlayer(oldValue);
+      const team = Object.keys(teams).find(t => (teams[t]||[]).includes(v)) || null;
+      await sbUpsertPlayer({ full_name: v, team, paid: !!paidStatus[v] });
+    }
   };
 
-  const requestDelete=(name)=>{setConfirmType("deleteIndividual");setConfirmDeleteName(name);setAwaitingConfirm(true);};
-  const cancelConfirm=()=>{setConfirmType(null);setConfirmDeleteName(null);setAwaitingConfirm(false);};
-  const performConfirm=async()=>{
-    if(!(confirmType==="deleteIndividual" && confirmDeleteName)) return cancelConfirm();
-    const nameToDelete=confirmDeleteName;
-    setIndividuals(prev=>prev.filter(n=>n!==nameToDelete));
-    setTeams(prev=>{const copy={}; for(const k in prev) copy[k]=(prev[k]||[]).filter(m=>m!==nameToDelete); return copy;});
-    setPaid(prev=>{const ns={...prev}; delete ns[nameToDelete]; return ns;});
-    if(window.sb) await sbDeletePlayer(nameToDelete);
-    cancelConfirm();
+  const requestDeleteIndividual = (idx) => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); };
+
+  const removeFromTeam = async (team, member) => {
+    setTeams(prev => {
+      const copy = { ...prev };
+      copy[team] = (copy[team] || []).filter(m => m !== member);
+      return copy;
+    });
+    if (window.sb) await sbUpsertPlayer({ full_name: member, team: null, paid: !!paidStatus[member] });
   };
 
-  /* ---- render ---- */
+  const handleClearSelection = () => {
+    if (clearOption === "individuals") setConfirmType("individuals");
+    else if (clearOption === "teams") setConfirmType("teams");
+    if (clearOption) setAwaitingConfirm(true);
+  };
+
+  const resetScores = async (team) => {
+    setTeamScores(prev => ({ ...prev, [team]: { win: 0, lose: 0 } }));
+    if (window.sb) await sbUpdateScore(team, 0, 0);
+  };
+
+  const updateScore = async (team, type, delta) => {
+    setTeamScores(prev => ({ ...prev, [team]: nextScore(prev[team], type, delta) }));
+    const cur = teamScores[team] || { win:0, lose:0 };
+    const nv = type==="win" ? { win: Math.max(0, cur.win+delta), lose: cur.lose } : { win: cur.win, lose: Math.max(0, cur.lose+delta) };
+    if (window.sb) await sbUpdateScore(team, nv.win, nv.lose);
+  };
+
+  const openChangePassword = () => { setShowPwd(true); setPwdErrors([]); setPwdSuccess(""); setCurPwd(""); setNewPwd(""); setNewPwd2(""); };
+  const closeChangePassword = () => { setShowPwd(false); setPwdErrors([]); setPwdSuccess(""); };
+  const submitChangePassword = (e) => {
+    e.preventDefault();
+    const errs = validateNewPassword(curPwd, newPwd, newPwd2);
+    if (errs.length) { setPwdErrors(errs); setPwdSuccess(""); return; }
+    storedPassword = newPwd;
+    setPwdErrors([]); setPwdSuccess("Password updated successfully.");
+    setTimeout(() => { closeChangePassword(); }, 800);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
-      <div className="mx-auto w-full max-w-6xl">
-        {/* Header / Add */}
-        <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-6">
-          <h1 className="text-2xl sm:text-3xl font-bold mb-4 text-center sm:text-left">
-            Perpetual Alumni Mini League
-          </h1>
-          <form onSubmit={add} className="flex flex-col sm:flex-row gap-3">
-            <input
-              className="flex-1 border rounded-xl px-3 py-2 h-11"
-              placeholder="Enter full name"
-              value={newName}
-              onChange={e=>setNewName(e.target.value)}
-            />
-            <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white">
-              Add
-            </button>
-          </form>
-        </div>
+    <div className="min-h-screen bg-gray-100 p-6 flex flex-col">
+      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 flex-1">
+        <h1 className="text-2xl font-bold mb-4 text-center">Perpetual Alumni Mini League</h1>
 
-        {/* Teams grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-          {TEAMS.map(team=>{
-            const w=scores[team]?.win??0; const l=scores[team]?.lose??0;
-            const members=(teams[team]||[]);
+        <p className="mb-2 text-gray-600 text-lg font-bold text-center">Total Registered Players: {individuals.length}</p>
+        <h2 className="text-xl font-semibold mt-6 mb-2">Player&apos;s Full name</h2>
+
+        <form onSubmit={addIndividual} className="flex gap-2 mb-4">
+          <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Enter full name" className="flex-1 border rounded px-3 py-2" />
+          <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Add</button>
+        </form>
+
+        <ol className="list-decimal list-inside space-y-2">
+          {individuals.map((name, idx) => {
+            const assigned = Object.keys(teams).find(t => (teams[t]||[]).includes(name)) || "";
             return (
-              <section key={team} className="bg-white rounded-2xl shadow-sm border p-4 sm:p-5">
-                <h2 className="text-lg sm:text-xl font-semibold mb-3">
-                  Team {team}
-                  <span className="ml-3 text-sm font-normal">
-                    (<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)
+              <li key={idx} className="flex items-center gap-4">
+                {editingIndex === idx ? (
+                  <>
+                    <input type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit(idx)} className="border rounded px-2 py-1" autoFocus />
+                    <button onClick={() => saveEdit(idx)} className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
+                    <button onClick={() => { setEditingIndex(null); setEditingValue(""); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
+                  </>
+                ) : (
+                  <span className="flex-1 font-medium text-left">
+                    {name}
+                    {paidStatus[name] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
                   </span>
-                </h2>
+                )}
 
-                <div className="flex flex-wrap gap-2 mb-3">
-                  <button type="button" onClick={()=>updateScore(team,"win",1)} className="h-9 px-3 border rounded-lg">+W</button>
-                  <button type="button" onClick={()=>updateScore(team,"win",-1)} className="h-9 px-3 border rounded-lg">-W</button>
-                  <button type="button" onClick={()=>updateScore(team,"lose",1)} className="h-9 px-3 border rounded-lg">+L</button>
-                  <button type="button" onClick={()=>updateScore(team,"lose",-1)} className="h-9 px-3 border rounded-lg">-L</button>
-                </div>
+                <select value={assigned} onChange={(e) => moveIndividualToTeam(name, e.target.value)} className="border rounded px-2 py-1">
+                  <option value="">No Team</option>
+                  {TEAMS.map((key) => <option key={key} value={key}>Team {key}</option>)}
+                </select>
 
-                <ul className="space-y-2">
-                  {members.length ? members.map((m, idx)=>(
-                    <li key={m} className="flex items-center gap-2">
-                      <span className="font-medium w-6 text-right">{idx+1}.</span>
-                      <span className="flex-1">{m}{paid[m] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}</span>
-                      <button type="button" onClick={()=>assign(m,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white">Remove</button>
-                    </li>
-                  )) : <li className="text-gray-400">No players</li>}
-                </ul>
-              </section>
+                {editingIndex === idx ? null : (
+                  <>
+                    <button onClick={() => togglePaid(name)} className={`px-2 py-1 rounded ${paidStatus[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
+                      {paidStatus[name] ? "Unmark Paid" : "Mark Paid"}
+                    </button>
+                    <button onClick={() => startEditing(idx, name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
+                    <button onClick={() => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); }} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
+                  </>
+                )}
+              </li>
             );
           })}
-        </div>
+        </ol>
 
-        {/* Players list (assign, edit, delete) */}
-        <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mt-6">
-          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
-          <ol className="space-y-2">
-            {individuals.map((name,i)=>{
-              const assigned=Object.keys(teams).find(t=>teams[t].includes(name))||"";
-              return (
-                <li key={name} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-                  {editingIndex===i?(
-                    <div className="flex items-center gap-2 w-full">
-                      <input className="border rounded-lg px-2 py-2 flex-1" value={editingValue} onChange={e=>setEditingValue(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveEdit(i)} autoFocus />
-                      <button type="button" onClick={()=>saveEdit(i)} className="h-9 px-3 rounded-lg bg-green-600 text-white">Save</button>
-                      <button type="button" onClick={()=>{setEditingIndex(null);setEditingValue("");}} className="h-9 px-3 rounded-lg bg-gray-400 text-white">Cancel</button>
-                    </div>
-                  ):(
-                    <span className="flex-1 font-medium">
-                      {name}{paid[name] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
-                    </span>
-                  )}
+        {Object.keys(teams).map((team) => {
+          const members = teams[team] || [];
+          return (
+            <div key={team}>
+              <h2 className="text-xl font-semibold mt-6 mb-2">
+                Team {team}
+                <span className="ml-4 text-sm">
+                  (<span className="text-green-600">Win {teamScores[team].win}</span> / <span className="text-red-600">Lose {teamScores[team].lose}</span>)
+                </span>
+              </h2>
+              <div className="flex gap-2 mb-2">
+                <button onClick={() => updateScore(team, "win", 1)} className="px-2 py-1 border rounded">+W</button>
+                <button onClick={() => updateScore(team, "win", -1)} className="px-2 py-1 border rounded">-W</button>
+                <button onClick={() => updateScore(team, "lose", 1)} className="px-2 py-1 border rounded">+L</button>
+                <button onClick={() => updateScore(team, "lose", -1)} className="px-2 py-1 border rounded">-L</button>
+                <button onClick={() => resetScores(team)} className="px-2 py-1 border rounded">Reset</button>
+              </div>
+              <ul className="list-inside space-y-1">
+                {members.length === 0 ? (
+                  <li className="text-gray-400">No players</li>
+                ) : (
+                  members.map((member, idx) => (
+                    <li key={idx} className="flex items-center gap-2">
+                      <span className="font-medium">{idx + 1}.</span>
+                      <span className="flex-1">
+                        {member}
+                        {paidStatus[member] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
+                      </span>
+                      <button onClick={() => removeFromTeam(team, member)} className="px-2 py-1 bg-red-500 text-white rounded">Remove</button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          );
+        })}
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={e=>assign(name,e.target.value)}>
-                      <option value="">No Team</option>
-                      {TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
-                    </select>
-
-                    {editingIndex===i?null:(
-                      <>
-                        <button type="button" onClick={()=>startEditing(i,name)} className="h-9 px-3 rounded-lg bg-yellow-500 text-white">Edit</button>
-                        <button type="button" onClick={()=>{setConfirmType("deleteIndividual");setConfirmDeleteName(name);setAwaitingConfirm(true);}} className="h-9 px-3 rounded-lg bg-red-500 text-white">Delete</button>
-                        <button type="button" onClick={()=>markPaid(name)} className={`h-9 px-3 rounded-lg text-white ${paid[name]?"bg-green-700":"bg-green-500"}`}>
-                          {paid[name]?"Unmark Paid":"Mark Paid"}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-
-        {/* Footer actions */}
-        <div className="flex justify-center mt-6">
-          <button type="button" onClick={onLogout} className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white">
-            Logout
-          </button>
+        <div className="mt-6 flex items-center gap-2">
+          <select value={clearOption} onChange={(e) => setClearOption(e.target.value)} className="border rounded px-3 py-2">
+            <option value="">Select Clear Option</option>
+            <option value="individuals">Clear Individuals</option>
+            <option value="teams">Clear Teams</option>
+          </select>
+          <button onClick={handleClearSelection} className="px-4 py-2 text-black border rounded">❌</button>
         </div>
       </div>
 
-      {/* Confirm modal */}
-      {confirmType==="deleteIndividual" && awaitingConfirm && (
+      <div className="max-w-4xl mx-auto mt-4 text-center flex items-center justify-center gap-2">
+        <button onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded">Logout</button>
+        <button onClick={() => setShowPwd(true)} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
+      </div>
+
+      {showPwd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={cancelConfirm}/>
-          <div className="relative z-10 bg-white rounded-2xl shadow-lg p-6 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-3">Delete Player</h3>
-            <p className="mb-4">Delete <span className="font-semibold">{confirmDeleteName}</span>?</p>
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => setShowPwd(false)} />
+          <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold mb-4">Change Password</h3>
+            {pwdErrors.length > 0 && (
+              <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                <ul className="list-disc list-inside">
+                  {pwdErrors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              </div>
+            )}
+            {pwdSuccess && (
+              <div className="mb-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2">{pwdSuccess}</div>
+            )}
+            <form onSubmit={submitChangePassword} className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">Current Password</label>
+                <input type="password" value={curPwd} onChange={(e) => setCurPwd(e.target.value)} className="w-full border rounded px-3 py-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">New Password</label>
+                <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full border rounded px-3 py-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Confirm New Password</label>
+                <input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} className="w-full border rounded px-3 py-2" />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setShowPwd(false)} className="px-4 py-2 border rounded">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {confirmType && awaitingConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => {
+            setConfirmType(null); setConfirmDeleteIndex(null); setAwaitingConfirm(false); setClearOption("");
+          }} />
+          <div className="bg-white rounded-lg shadow-lg p-6 z-60 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold mb-2">Final Action</h3>
+            <p className="mb-4">
+              {confirmType === "individuals"
+                ? "Clear ALL individual registrations?"
+                : confirmType === "teams"
+                ? "Clear ALL team rosters?"
+                : "Delete this individual?"}
+            </p>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={cancelConfirm} className="h-10 px-4 border rounded-xl">Cancel</button>
-              <button type="button" onClick={performConfirm} className="h-10 px-4 rounded-xl bg-red-600 text-white">Confirm</button>
+              <button onClick={() => {
+                setConfirmType(null); setConfirmDeleteIndex(null); setAwaitingConfirm(false); setClearOption("");
+              }} className="px-4 py-2 border rounded">Cancel</button>
+              <button onClick={performClear} className="px-4 py-2 bg-red-600 text-white rounded">Confirm</button>
             </div>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+// ---- Default export used by main.jsx
+export default function App() {
+  return <PerpetualGymLeagueApp />;
 }
