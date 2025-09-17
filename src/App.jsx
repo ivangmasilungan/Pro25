@@ -17,71 +17,49 @@ function getCookie(name) {
 function delCookie(name) {
   try { document.cookie = `${name}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`; } catch {}
 }
-
 function useAuthUser() {
-  // read synchronously -> no flicker on first paint
   const [user, setUser] = useState(() => getCookie("auth_user") || localStorage.getItem("auth_user") || null);
-
-  const login = (name) => {
-    try { localStorage.setItem("auth_user", name); } catch {}
-    setCookie("auth_user", name);
-    setUser(name);
-  };
-  const logout = () => {
-    try { localStorage.removeItem("auth_user"); } catch {}
-    delCookie("auth_user");
-    setUser(null);
-  };
-
-  // keep multiple tabs in sync
-  useEffect(() => {
-    const onStorage = (e) => { if (e.key === "auth_user") setUser(e.newValue); };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
+  const login = (name) => { try { localStorage.setItem("auth_user", name); } catch {} setCookie("auth_user", name); setUser(name); };
+  const logout = () => { try { localStorage.removeItem("auth_user"); } catch {} delCookie("auth_user"); setUser(null); };
+  useEffect(() => { const onStorage = (e) => e.key === "auth_user" && setUser(e.newValue); window.addEventListener("storage", onStorage); return () => window.removeEventListener("storage", onStorage); }, []);
   return { user, login, logout };
 }
 
 /* --------------------------------- Helpers --------------------------------- */
-function safeLogoSrc(envUrl, globalUrl) {
-  if (globalUrl && typeof globalUrl === "string") return globalUrl;
-  if (envUrl && typeof envUrl === "string") return envUrl;
-  return "/sports_logo.jpg";
-}
-function nextScore(prev, type, delta) {
-  const current = Math.max(0, Number(prev?.[type] ?? 0));
-  const n = Math.max(0, current + Number(delta || 0));
-  return { ...prev, [type]: n };
-}
+const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
+const emptyTeams = TEAMS.reduce((a,t)=>{a[t]=[];return a;}, {});
+function safeLogoSrc(envUrl, globalUrl) { if (globalUrl) return globalUrl; if (envUrl) return envUrl; return "/sports_logo.jpg"; }
+function nextScore(prev, type, delta) { const current = Math.max(0, Number(prev?.[type] ?? 0)); const n = Math.max(0, current + Number(delta||0)); return { ...prev, [type]: n }; }
 
 /* --------------------------- Demo credentials --------------------------- */
 let storedUsername = "Admin";
 let storedPassword = "@lum2025!";
 
 /* ----------------------- Supabase-aware data helpers ----------------------- */
-const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
-const emptyTeams = TEAMS.reduce((a,t)=>{a[t]=[];return a;}, {});
-
 async function sbFetchAll() {
   if (!window.sb) return null;
-  const [{ data: players }, { data: scores }] = await Promise.all([
+  const [{ data: players, error: e1 }, { data: scores, error: e2 }] = await Promise.all([
     window.sb.from("players").select("full_name, team, paid").order("full_name",{ascending:true}),
     window.sb.from("team_scores").select("team,wins,losses"),
   ]);
+  if (e1) console.warn("players fetch error:", e1);
+  if (e2) console.warn("team_scores fetch error:", e2);
   return { players: players || [], scores: scores || [] };
 }
 async function sbUpsertPlayer({ full_name, team=null, paid=false }) {
   if (!window.sb) return;
-  await window.sb.from("players").upsert({ full_name, team, paid });
+  const { error } = await window.sb.from("players").upsert({ full_name, team, paid });
+  if (error) throw error;
 }
 async function sbDeletePlayer(full_name) {
   if (!window.sb) return;
-  await window.sb.from("players").delete().eq("full_name", full_name);
+  const { error } = await window.sb.from("players").delete().eq("full_name", full_name);
+  if (error) throw error;
 }
 async function sbUpdateScore(team, win, lose) {
   if (!window.sb) return;
-  await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
+  const { error } = await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
+  if (error) throw error;
 }
 
 /* ------------------------------------ UI ----------------------------------- */
@@ -89,24 +67,12 @@ function LoginPage({ onLogin }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
   const [hideLogo, setHideLogo] = useState(false);
-  const logoSrc = useMemo(() => {
-    const envUrl = import.meta.env?.VITE_LOGO_URL;
-    const globalUrl = typeof window !== "undefined" ? window.__APP_LOGO__ : undefined;
-    return safeLogoSrc(envUrl, globalUrl);
-  }, []);
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (u === storedUsername && p === storedPassword) onLogin(u);
-    else alert("Invalid");
-  };
-
+  const logoSrc = useMemo(() => safeLogoSrc(import.meta.env?.VITE_LOGO_URL, typeof window !== "undefined" ? window.__APP_LOGO__ : undefined), []);
+  const submit = (e) => { e.preventDefault(); if (u === storedUsername && p === storedPassword) onLogin(u); else alert("Invalid"); };
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-200">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md flex flex-col items-center">
-        {!hideLogo ? (
-          <img src={logoSrc} alt="Logo" className="w-32 h-32 mb-6 object-contain" onError={() => setHideLogo(true)} />
-        ) : <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>}
+        {!hideLogo ? <img src={logoSrc} alt="Logo" className="w-32 h-32 mb-6 object-contain" onError={() => setHideLogo(true)} /> : <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>}
         <h1 className="text-2xl font-bold mb-6">Login</h1>
         <form onSubmit={submit} className="space-y-4 w-full">
           <input className="w-full border rounded px-3 py-2" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
@@ -123,6 +89,8 @@ function PerpetualGymLeagueApp() {
   return user ? <PerpetualGymLeague onLogout={logout} /> : <LoginPage onLogin={login} />;
 }
 
+export default function App() { return <PerpetualGymLeagueApp />; }
+
 function PerpetualGymLeague({ onLogout }) {
   const [individuals, setIndividuals] = useState([]);
   const [teams, setTeams] = useState(emptyTeams);
@@ -130,19 +98,21 @@ function PerpetualGymLeague({ onLogout }) {
   const [scores, setScores] = useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
   const [newName, setNewName] = useState("");
 
-  // confirm state – USE NAME (not index)
+  // Confirm state — USE NAME (not index)
   const [confirmType, setConfirmType] = useState(null);
   const [confirmDeleteName, setConfirmDeleteName] = useState(null);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
 
-  // edit state
+  // Inline edit
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingValue, setEditingValue] = useState("");
 
   useEffect(() => {
     (async () => {
       if (!window.sb) return;
-      const { players, scores: teamScores } = (await sbFetchAll()) || { players: [], scores: [] };
+      const res = await sbFetchAll();
+      if (!res) return;
+      const { players, scores: teamScores } = res;
 
       setIndividuals(players.map(p=>p.full_name));
       const tmap = TEAMS.reduce((a,t)=>{a[t]=[];return a;}, {});
@@ -156,13 +126,14 @@ function PerpetualGymLeague({ onLogout }) {
     })();
   }, []);
 
+  /* ------------------------------ CRUD handlers ------------------------------ */
   const add = async (e) => {
     e.preventDefault();
     const v = newName.trim();
     if (!v) return;
-    setIndividuals(prev=>prev.concat(v));
     setNewName("");
-    if (window.sb) await sbUpsertPlayer({ full_name: v, team: null, paid: false });
+    setIndividuals(prev=>prev.concat(v));
+    if (window.sb) try { await sbUpsertPlayer({ full_name: v, team: null, paid: false }); } catch (err) { console.error(err); }
   };
 
   const assign = async (name, team) => {
@@ -171,74 +142,93 @@ function PerpetualGymLeague({ onLogout }) {
       if (team) copy[team] = [...(copy[team]||[]), name];
       return copy;
     });
-    if (window.sb) await sbUpsertPlayer({ full_name: name, team, paid: !!paid[name] });
+    if (window.sb) try { await sbUpsertPlayer({ full_name: name, team, paid: !!paid[name] }); } catch (err) { console.error(err); }
   };
 
   const markPaid = async (name) => {
     setPaid(prev => ({...prev, [name]: !prev[name]}));
-    if (window.sb) await sbUpsertPlayer({ full_name: name, team: Object.keys(teams).find(t => teams[t].includes(name)) || null, paid: !paid[name] });
+    if (window.sb) try {
+      await sbUpsertPlayer({ full_name: name, team: Object.keys(teams).find(t => teams[t].includes(name)) || null, paid: !paid[name] });
+    } catch (err) { console.error(err); }
   };
 
   const updateScore = async (team, type, delta) => {
     setScores(prev => ({ ...prev, [team]: nextScore(prev[team], type, delta) }));
     const cur = scores[team] || { win:0, lose:0 };
     const nv = type==="win" ? { win: Math.max(0, cur.win+delta), lose: cur.lose } : { win: cur.win, lose: Math.max(0, cur.lose+delta) };
-    if (window.sb) await sbUpdateScore(team, nv.win, nv.lose);
+    if (window.sb) try { await sbUpdateScore(team, nv.win, nv.lose); } catch (err) { console.error(err); }
+  };
+
+  // open confirm for a NAME (not index)
+  const requestDelete = (name) => { setConfirmType("deleteIndividual"); setConfirmDeleteName(name); setAwaitingConfirm(true); };
+  const cancelConfirm = () => { setConfirmType(null); setConfirmDeleteName(null); setAwaitingConfirm(false); };
+
+  // Robust delete: optimistic UI + rollback on error
+  const performConfirm = async () => {
+    if (!(confirmType === "deleteIndividual" && confirmDeleteName)) { cancelConfirm(); return; }
+    const nameToDelete = confirmDeleteName;
+
+    // snapshot for rollback
+    const prevInd = individuals;
+    const prevTeams = teams;
+    const prevPaid = paid;
+
+    // optimistic UI
+    setIndividuals(prev => prev.filter(n => n !== nameToDelete));
+    setTeams(prev => {
+      const copy = {};
+      for (const k in prev) copy[k] = (prev[k]||[]).filter(m => m !== nameToDelete);
+      return copy;
+    });
+    setPaid(prev => { const ns = { ...prev }; delete ns[nameToDelete]; return ns; });
+
+    try {
+      if (window.sb) await sbDeletePlayer(nameToDelete);
+    } catch (err) {
+      // rollback on failure
+      console.error("Supabase delete failed:", err);
+      alert("Delete failed in database. Rolling back.\n\nTip: make sure your Supabase RLS policy allows DELETE for anon.");
+      setIndividuals(prevInd);
+      setTeams(prevTeams);
+      setPaid(prevPaid);
+    } finally {
+      cancelConfirm();
+    }
   };
 
   const startEditing = (i, current) => { setEditingIndex(i); setEditingValue(current); };
   const saveEdit = async (i) => {
     const v = editingValue.trim(); if (!v) return;
     const old = individuals[i];
+
+    const prevTeams = teams;
+    const prevPaid = paid;
     setIndividuals(prev => prev.map((n, idx) => (idx === i ? v : n)));
     setTeams(prev => {
       const copy = {};
       for (const k in prev) copy[k] = (prev[k]||[]).map(m => (m === old ? v : m));
       return copy;
     });
-    setPaid(prev => {
-      const ns = {...prev};
-      if (prev[old]) ns[v] = true;
-      delete ns[old];
-      return ns;
-    });
+    setPaid(prev => { const ns = {...prev}; if (prev[old]) ns[v] = true; delete ns[old]; return ns; });
     setEditingIndex(null); setEditingValue("");
+
     if (window.sb) {
-      await sbDeletePlayer(old);
-      const t = Object.keys(teams).find(tt => (teams[tt]||[]).includes(v)) || null;
-      await sbUpsertPlayer({ full_name: v, team: t, paid: !!paid[v] });
+      try {
+        await sbDeletePlayer(old);
+        const t = Object.keys(prevTeams).find(tt => (prevTeams[tt]||[]).includes(old)) || null;
+        await sbUpsertPlayer({ full_name: v, team: t, paid: !!prevPaid[old] });
+      } catch (err) {
+        console.error("rename failed:", err);
+        alert("Rename failed in database. Rolling back.");
+        // rollback
+        setIndividuals(prev => prev.map((n, idx) => (idx === i ? old : n)));
+        setTeams(prevTeams);
+        setPaid(prevPaid);
+      }
     }
   };
 
-  // OPEN confirm for this name
-  const requestDelete = (name) => {
-    setConfirmType("deleteIndividual");
-    setConfirmDeleteName(name);
-    setAwaitingConfirm(true);
-  };
-
-  // CLEAR helpers
-  const cancelConfirm = () => {
-    setConfirmType(null);
-    setConfirmDeleteName(null);
-    setAwaitingConfirm(false);
-  };
-
-  const performConfirm = async () => {
-    if (confirmType === "deleteIndividual" && confirmDeleteName) {
-      const nameToDelete = confirmDeleteName;
-      setIndividuals(prev => prev.filter(n => n !== nameToDelete));
-      setTeams(prev => {
-        const copy = {};
-        for (const k in prev) copy[k] = (prev[k]||[]).filter(m => m !== nameToDelete);
-        return copy;
-      });
-      setPaid(prev => { const ns={...prev}; delete ns[nameToDelete]; return ns; });
-      if (window.sb) await sbDeletePlayer(nameToDelete);
-    }
-    cancelConfirm();
-  };
-
+  /* --------------------------------- render --------------------------------- */
   return (
     <div className="min-h-screen bg-gray-100 p-6 flex flex-col">
       <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 flex-1">
@@ -271,7 +261,7 @@ function PerpetualGymLeague({ onLogout }) {
 
                 {editingIndex === i ? null : (
                   <>
-                    <button type="button" onClick={()=>setEditingIndex(i)||setEditingValue(name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
+                    <button type="button" onClick={()=>startEditing(i, name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
                     <button type="button" onClick={()=>requestDelete(name)} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
                     <button type="button" onClick={()=>markPaid(name)} className={`px-2 py-1 rounded ${paid[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
                       {paid[name] ? "Unmark Paid" : "Mark Paid"}
@@ -332,9 +322,4 @@ function PerpetualGymLeague({ onLogout }) {
       )}
     </div>
   );
-}
-
-/* --------------------------------- Export --------------------------------- */
-export default function App() {
-  return <PerpetualGymLeagueApp />;
 }
