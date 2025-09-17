@@ -30,8 +30,11 @@ function validateCredentials(u, p) {
 // =====================================================
 // Login Page
 // =====================================================
-import logo from './assets/sports_logo.jpg'; // relative path mula sa component file
-<img src={logo} alt="League Logo" className="w-32 h-32 mb-6 object-contain" />
+<image
+  src="/sports_logo.jpg"
+  alt="League Logo"
+  className="w-32 h-32 mb-6 object-contain"
+/>
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
