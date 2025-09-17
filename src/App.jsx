@@ -1,477 +1,265 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useState } from "react";
 
-/* ======================= Persisted Auth (Storage + Cookie) ======================= */
-function setCookie(name, value, days = 365) {
-  try {
-    const exp = new Date(Date.now() + days * 864e5).toUTCString();
-    document.cookie = `${name}=${encodeURIComponent(value)}; Expires=${exp}; Path=/; SameSite=Lax`;
-  } catch {}
-}
-function getCookie(name) {
-  try {
-    const m = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-    return m ? decodeURIComponent(m[2]) : null;
-  } catch { return null; }
-}
-function delCookie(name) {
-  try { document.cookie = `${name}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`; } catch {}
+/* ----------------- auth (cookie + localStorage) ----------------- */
+function setCookie(n,v,d=365){try{document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}catch{}}
+function getCookie(n){try{const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null;}catch{return null}}
+function delCookie(n){try{document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`;}catch{}}
+function useAuthUser(){
+  const [user,setUser]=useState(()=>getCookie("auth_user")||localStorage.getItem("auth_user")||null);
+  const login =(name)=>{try{localStorage.setItem("auth_user",name);}catch{}; setCookie("auth_user",name); setUser(name);};
+  const logout=()=>{try{localStorage.removeItem("auth_user");}catch{}; delCookie("auth_user"); setUser(null);};
+  useEffect(()=>{const onStorage=e=>{if(e.key==="auth_user") setUser(e.newValue)}; window.addEventListener("storage",onStorage); return()=>window.removeEventListener("storage",onStorage)},[]);
+  return {user,login,logout};
 }
 
-/** Read synchronously on first render (no flicker). */
-function useAuthUser() {
-  const [user, setUser] = useState(() => {
-    try {
-      return getCookie("auth_user") || localStorage.getItem("auth_user") || null;
-    } catch { return null; }
-  });
+/* ----------------- local snapshot (refresh safe) ----------------- */
+const LS_KEY="paml:v3";
+const loadLocal =()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}};
+const saveLocal =(state)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(state));}catch{}};
 
-  const login = (name) => {
-    try { localStorage.setItem("auth_user", name); } catch {}
-    setCookie("auth_user", name);
-    setUser(name);
-  };
+/* ----------------------------- helpers ---------------------------- */
+const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
+const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
+const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
+const safeLogo=(envUrl,globalUrl)=>globalUrl||envUrl||"/sports_logo.jpg";
 
-  const logout = () => {
-    try { localStorage.removeItem("auth_user"); } catch {}
-    delCookie("auth_user");
-    setUser(null);
-  };
+/* --------------------------- demo creds --------------------------- */
+let storedUsername="Admin";
+let storedPassword="@lum2025!";
 
-  // keep multiple tabs/windows in sync
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key === "auth_user") setUser(e.newValue);
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+/* ---------------------- supabase convenience --------------------- */
+const sb = typeof window !== "undefined" ? window.sb : undefined;
 
-  return { user, login, logout };
-}
-
-/* -------------------------------- Helpers -------------------------------- */
-function safeLogoSrc(envUrl, globalUrl) {
-  if (globalUrl && typeof globalUrl === "string") return globalUrl;
-  if (envUrl && typeof envUrl === "string") return envUrl;
-  return "/sports_logo.jpg";
-}
-function nextScore(prev, type, delta) {
-  const current = Math.max(0, Number(prev?.[type] ?? 0));
-  const n = Math.max(0, current + Number(delta || 0));
-  return { ...prev, [type]: n };
-}
-
-/* ---------------------------- Demo credentials ---------------------------- */
-let storedUsername = "Admin";
-let storedPassword = "@lum2025!";
-
-/* ------------------------ Supabase-aware data helpers --------------------- */
-const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
-const emptyTeams = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
-
-async function sbFetchAll() {
-  if (!window.sb) return null;
-  const [{ data: players }, { data: scores }] = await Promise.all([
-    window.sb.from("players").select("full_name, team, paid").order("full_name", { ascending: true }),
-    window.sb.from("team_scores").select("team, wins, losses"),
+async function sbFetchAll(){
+  if(!sb) return null;
+  const [{data:players, error:e1},{data:scores, error:e2}] = await Promise.all([
+    sb.from("players").select("full_name,team,paid").order("full_name",{ascending:true}),
+    sb.from("team_scores").select("team,wins,losses"),
   ]);
-  return { players: players || [], scores: scores || [] };
+  if (e1 || e2) throw e1 || e2;
+  return {players:players||[], scores:scores||[]};
 }
-async function sbUpsertPlayer({ full_name, team=null, paid=false }) {
-  if (!window.sb) return;
-  await window.sb.from("players").upsert({ full_name, team, paid });
-}
-async function sbDeletePlayer(full_name) {
-  if (!window.sb) return;
-  await window.sb.from("players").delete().eq("full_name", full_name);
-}
-async function sbUpdateScore(team, win, lose) {
-  if (!window.sb) return;
-  await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
+async function sbBulkUpsert(local){
+  if(!sb) return;
+  const playerRows = (local.individuals||[]).map(n=>({
+    full_name:n,
+    team:Object.keys(local.teams||{}).find(t=>(local.teams[t]||[]).includes(n))||null,
+    paid:!!(local.paid||{})[n],
+  }));
+  const scoreRows = TEAMS.map(t=>({
+    team:t, wins: local.scores?.[t]?.win||0, losses: local.scores?.[t]?.lose||0
+  }));
+  const { error: e1 } = await sb.from("players").upsert(playerRows, { onConflict: "full_name" });
+  if (e1) throw e1;
+  const { error: e2 } = await sb.from("team_scores").upsert(scoreRows, { onConflict: "team" });
+  if (e2) throw e2;
 }
 
-/* ---------------------------------- UI ----------------------------------- */
-function LoginPage({ onLogin }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [hideLogo, setHideLogo] = useState(false);
-  const logoSrc = useMemo(() => {
-    const envUrl = import.meta.env?.VITE_LOGO_URL;
-    const globalUrl = (typeof window !== "undefined" && window.__APP_LOGO__) ? window.__APP_LOGO__ : undefined;
-    return safeLogoSrc(envUrl, globalUrl);
-  }, []);
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (username === storedUsername && password === storedPassword) onLogin(username);
-    else alert("Invalid credentials. Please try again.");
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-200">
-      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md flex flex-col items-center">
-        {!hideLogo ? (
-          <img src={logoSrc} alt="League Logo" className="w-32 h-32 mb-6 object-contain" onError={() => setHideLogo(true)} />
-        ) : (
-          <div className="w-32 h-32 mb-6 rounded-full bg-gray-100 grid place-items-center text-sm text-gray-500">No Logo</div>
-        )}
-        <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
-        <form onSubmit={handleSubmit} className="space-y-4 w-full">
-          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border rounded px-3 py-2" />
-          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border rounded px-3 py-2" />
-          <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">Login</button>
+/* ------------------------------ UI ------------------------------- */
+function Login({onLogin}){
+  const [u,setU]=useState(""); const [p,setP]=useState(""); const [hide,setHide]=useState(false);
+  const logo=useMemo(()=>safeLogo(import.meta.env?.VITE_LOGO_URL, typeof window!=="undefined"?window.__APP_LOGO__:undefined),[]);
+  return(
+    <div className="min-h-screen grid place-items-center bg-slate-50 p-6">
+      <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-lg text-center">
+        {!hide ? <img src={logo} alt="Logo" className="w-28 h-28 mx-auto mb-6 object-contain" onError={()=>setHide(true)}/> :
+          <div className="w-28 h-28 mx-auto mb-6 rounded-full bg-gray-100 grid place-items-center text-xs text-gray-500">No Logo</div>}
+        <h1 className="text-2xl font-bold mb-6">Login</h1>
+        <form onSubmit={(e)=>{e.preventDefault(); if(u===storedUsername && p===storedPassword) onLogin(u); else alert("Invalid");}} className="space-y-3">
+          <input className="w-full border rounded-lg px-3 py-2" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
+          <input className="w-full border rounded-lg px-3 py-2" type="password" placeholder="Password" value={p} onChange={e=>setP(e.target.value)} />
+          <button className="w-full h-10 rounded-lg bg-blue-600 text-white">Login</button>
         </form>
-        <p className="text-xs text-gray-500 mt-4">Created by IGM</p>
       </div>
     </div>
   );
 }
 
-function PerpetualGymLeagueApp() {
-  const { user, login, logout } = useAuthUser();
-  return user
-    ? <PerpetualGymLeague onLogout={logout} />
-    : <LoginPage onLogin={login} />;
+export default function App(){
+  const {user,login,logout}=useAuthUser();
+  return user ? <League onLogout={logout}/> : <Login onLogin={login}/>;
 }
 
-function PerpetualGymLeague({ onLogout }) {
-  const [individuals, setIndividuals] = useState([]);
-  const [teams, setTeams] = useState(emptyTeams);
-  const [newName, setNewName] = useState("");
-  const [confirmType, setConfirmType] = useState(null);
-  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState(null);
-  const [editingIndex, setEditingIndex] = useState(null);
-  const [editingValue, setEditingValue] = useState("");
-  const [paidStatus, setPaidStatus] = useState({});
-  const [clearOption, setClearOption] = useState("");
-  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
-  const [teamScores, setTeamScores] = useState(TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {}));
+function League({onLogout}){
+  const [individuals,setIndividuals]=useState([]);
+  const [teams,setTeams]=useState(emptyTeams);
+  const [paid,setPaid]=useState({});
+  const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
+  const [newName,setNewName]=useState("");
+  const [conn, setConn] = useState(sb ? "online" : "local"); // connection badge
 
-  const [showPwd, setShowPwd] = useState(false);
-  const [curPwd, setCurPwd] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const [newPwd2, setNewPwd2] = useState("");
-  const [pwdErrors, setPwdErrors] = useState([]);
-  const [pwdSuccess, setPwdSuccess] = useState("");
+  /* ------------ initial load: remote → fallback to local ------------- */
+  useEffect(()=>{(async()=>{
+    const localSnap = loadLocal();
+    if (sb) {
+      try {
+        const res = await sbFetchAll();
+        const players = res?.players || [];
+        // self-heal: remote empty but local has data → push local → reload from remote
+        if (players.length === 0 && localSnap && (localSnap.individuals||[]).length > 0) {
+          await sbBulkUpsert(localSnap);
+          const res2 = await sbFetchAll();
+          applyRemote(res2);
+          setConn("online");
+          return;
+        }
+        applyRemote(res);
+        setConn("online");
+        return;
+      } catch (e) {
+        console.warn("[supabase] fetch failed; using local snapshot", e);
+        setConn("local");
+      }
+    }
+    // local-only path
+    if (localSnap) applyLocal(localSnap);
+  })();},[]);
 
-  useEffect(() => {
-    (async () => {
-      if (!window.sb) return; // in-memory mode if no Supabase
-      const res = await sbFetchAll();
-      if (!res) return;
-      const { players, scores } = res;
-
-      setIndividuals(players.map(p => p.full_name));
-      const teamMap = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
-      players.forEach(p => { if (p.team && teamMap[p.team]) teamMap[p.team].push(p.full_name); });
-      setTeams(teamMap);
-      setPaidStatus(players.reduce((acc,p)=>{acc[p.full_name]=!!p.paid; return acc;}, {}));
-
-      const scoreMap = TEAMS.reduce((acc,t)=>{acc[t]={win:0,lose:0}; return acc;}, {});
-      (scores||[]).forEach(row => {
-        if (scoreMap[row.team]) scoreMap[row.team] = { win: row.wins||0, lose: row.losses||0 };
-      });
-      setTeamScores(scoreMap);
-    })();
-  }, []);
-
-  function validateNewPassword(current, next1, next2) {
-    const errs = [];
-    if (current !== storedPassword) errs.push("Current password is incorrect.");
-    if (!next1 || next1.length < 8) errs.push("New password must be at least 8 characters.");
-    if (next1 !== next2) errs.push("Passwords do not match.");
-    return errs;
+  // helpers to apply states
+  function applyRemote(remote){
+    if (!remote) return;
+    const {players, scores: ts} = remote;
+    setIndividuals(players.map(p=>p.full_name));
+    const t = TEAMS.reduce((a,k)=>{a[k]=[];return a;},{});
+    players.forEach(p=>{ if(p.team && t[p.team]) t[p.team].push(p.full_name); });
+    setTeams(t);
+    setPaid(players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}));
+    const s = TEAMS.reduce((a,k)=>{a[k]={win:0,lose:0};return a;},{});
+    (ts||[]).forEach(r=>{ if(s[r.team]) s[r.team]={win:r.wins||0,lose:r.losses||0}; });
+    setScores(s);
+    saveLocal({individuals:players.map(p=>p.full_name),teams:t,paid:players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}),scores:s});
+  }
+  function applyLocal(snap){
+    setIndividuals(snap.individuals||[]);
+    setTeams(snap.teams||emptyTeams);
+    setPaid(snap.paid||{});
+    setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
   }
 
-  const addIndividual = async (e) => {
-    e.preventDefault();
-    const v = (newName || "").trim();
-    if (!v) return;
-    setNewName("");
-    setIndividuals(prev => prev.concat(v));
-    if (window.sb) await sbUpsertPlayer({ full_name: v, team: null, paid: false });
-  };
+  /* ------------- write-through local snapshot on change -------------- */
+  useEffect(()=>{ saveLocal({individuals,teams,paid,scores}); },[individuals,teams,paid,scores]);
 
-  const togglePaid = async (name) => {
-    setPaidStatus(prev => ({ ...prev, [name]: !prev[name] }));
-    if (window.sb) {
-      const team = Object.keys(teams).find(t => (teams[t]||[]).includes(name)) || null;
-      await sbUpsertPlayer({ full_name: name, team, paid: !paidStatus[name] });
+  /* ---------------- actions (write DB + local) ---------------- */
+  const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return;
+    setNewName(""); setIndividuals(p=>p.concat(v));
+    if (sb) {
+      const { error } = await sb.from("players").upsert({ full_name:v, team:null, paid:false });
+      if (error) { console.error(error); alert("Supabase insert blocked. Check RLS and env keys."); setConn("local"); }
+    }
+  };
+  const assign = async(name, team)=>{
+    setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;});
+    if (sb) {
+      const { error } = await sb.from("players").upsert({ full_name:name, team, paid:!!paid[name] });
+      if (error) { console.error(error); alert("Supabase upsert blocked."); setConn("local"); }
+    }
+  };
+  const togglePaid = async(name)=>{
+    setPaid(prev=>({...prev,[name]:!prev[name]}));
+    if (sb) {
+      const t = Object.keys(teams).find(k=>teams[k].includes(name))||null;
+      const { error } = await sb.from("players").upsert({ full_name:name, team:t, paid:!paid[name] });
+      if (error) { console.error(error); alert("Supabase update blocked."); setConn("local"); }
+    }
+  };
+  const remove = async(name)=>{
+    setIndividuals(prev=>prev.filter(n=>n!==name));
+    setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==name); return c;});
+    setPaid(prev=>{const n={...prev}; delete n[name]; return n;});
+    if (sb) {
+      const { error } = await sb.from("players").delete().eq("full_name", name);
+      if (error) { console.error(error); alert("Supabase delete blocked."); setConn("local"); }
+    }
+  };
+  const inc = async(team,type,delta)=>{
+    setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
+    if (sb) {
+      const cur = scores[team]||{win:0,lose:0};
+      const nv = type==="win" ? {win:Math.max(0,cur.win+delta),lose:cur.lose} : {win:cur.win,lose:Math.max(0,cur.lose+delta)};
+      const { error } = await sb.from("team_scores").upsert({ team, wins:nv.win, losses:nv.lose }, { onConflict:"team" });
+      if (error) { console.error(error); alert("Supabase score update blocked."); setConn("local"); }
     }
   };
 
-  const cancelClear = () => {
-    setConfirmType(null);
-    setConfirmDeleteIndex(null);
-    setAwaitingConfirm(false);
-    setClearOption("");
-  };
-
-  const performClear = async () => {
-    if (confirmType === "individuals") {
-      if (window.sb) await window.sb.from("players").delete().neq("full_name", "");
-      setIndividuals([]); setPaidStatus({}); setTeams(emptyTeams);
-    } else if (confirmType === "teams") {
-      const names = [...individuals];
-      setTeams(emptyTeams);
-      if (window.sb) for (const n of names) await sbUpsertPlayer({ full_name: n, team: null, paid: !!paidStatus[n] });
-    } else if (confirmType === "deleteIndividual" && confirmDeleteIndex !== null) {
-      const nameToDelete = individuals[confirmDeleteIndex];
-      setIndividuals(prev => prev.filter((_, i) => i !== confirmDeleteIndex));
-      setTeams(prev => {
-        const copy = {};
-        for (const k in prev) copy[k] = prev[k].filter(m => m !== nameToDelete);
-        return copy;
-      });
-      setPaidStatus(prev => { const ns = { ...prev }; delete ns[nameToDelete]; return ns; });
-      if (window.sb) await sbDeletePlayer(nameToDelete);
-    }
-    cancelClear();
-  };
-
-  const moveIndividualToTeam = async (name, selectedTeam) => {
-    setTeams(prev => {
-      const copy = {};
-      Object.keys(prev).forEach(t => { copy[t] = (prev[t] || []).filter(m => m !== name); });
-      if (selectedTeam) {
-        copy[selectedTeam] = copy[selectedTeam] || [];
-        if (copy[selectedTeam].length < 15 && !copy[selectedTeam].includes(name)) copy[selectedTeam].push(name);
-        else if (copy[selectedTeam].length >= 15) alert("Team " + selectedTeam + " is already full.");
-      }
-      return copy;
-    });
-    if (window.sb) await sbUpsertPlayer({ full_name: name, team: selectedTeam || null, paid: !!paidStatus[name] });
-  };
-
-  const startEditing = (idx, currentValue) => { setEditingIndex(idx); setEditingValue(currentValue); };
-  const saveEdit = async (idx) => {
-    const v = (editingValue || "").trim(); if (!v) return;
-    const oldValue = individuals[idx];
-    setIndividuals(prev => prev.map((n, i) => (i === idx ? v : n)));
-    setTeams(prev => {
-      const copy = {};
-      Object.keys(prev).forEach(t => { copy[t] = (prev[t] || []).map(m => (m === oldValue ? v : m)); });
-      return copy;
-    });
-    setPaidStatus(prev => {
-      const ns = { ...prev };
-      if (prev[oldValue]) ns[v] = true;
-      delete ns[oldValue];
-      return ns;
-    });
-    setEditingIndex(null); setEditingValue("");
-    if (window.sb) {
-      await sbDeletePlayer(oldValue);
-      const team = Object.keys(teams).find(t => (teams[t]||[]).includes(v)) || null;
-      await sbUpsertPlayer({ full_name: v, team, paid: !!paidStatus[v] });
-    }
-  };
-
-  const removeFromTeam = async (team, member) => {
-    setTeams(prev => {
-      const copy = { ...prev };
-      copy[team] = (copy[team] || []).filter(m => m !== member);
-      return copy;
-    });
-    if (window.sb) await sbUpsertPlayer({ full_name: member, team: null, paid: !!paidStatus[member] });
-  };
-
-  const handleClearSelection = () => {
-    if (clearOption === "individuals") setConfirmType("individuals");
-    else if (clearOption === "teams") setConfirmType("teams");
-    if (clearOption) setAwaitingConfirm(true);
-  };
-
-  const resetScores = async (team) => {
-    setTeamScores(prev => ({ ...prev, [team]: { win: 0, lose: 0 } }));
-    if (window.sb) await sbUpdateScore(team, 0, 0);
-  };
-
-  const updateScore = async (team, type, delta) => {
-    setTeamScores(prev => ({ ...prev, [team]: nextScore(prev[team], type, delta) }));
-    const cur = teamScores[team] || { win:0, lose:0 };
-    const nv = type==="win" ? { win: Math.max(0, cur.win+delta), lose: cur.lose } : { win: cur.win, lose: Math.max(0, cur.lose+delta) };
-    if (window.sb) await sbUpdateScore(team, nv.win, nv.lose);
-  };
-
-  const openChangePassword = () => { setShowPwd(true); setPwdErrors([]); setPwdSuccess(""); setCurPwd(""); setNewPwd(""); setNewPwd2(""); };
-  const closeChangePassword = () => { setShowPwd(false); setPwdErrors([]); setPwdSuccess(""); };
-  const submitChangePassword = (e) => {
-    e.preventDefault();
-    const errs = validateNewPassword(curPwd, newPwd, newPwd2);
-    if (errs.length) { setPwdErrors(errs); setPwdSuccess(""); return; }
-    storedPassword = newPwd;
-    setPwdErrors([]); setPwdSuccess("Password updated successfully.");
-    setTimeout(() => { closeChangePassword(); }, 800);
-  };
-
+  /* ---------------------------- render ---------------------------- */
   return (
-    <div className="min-h-screen bg-gray-100 p-6 flex flex-col">
-      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 flex-1">
-        <h1 className="text-2xl font-bold mb-4 text-center">Perpetual Alumni Mini League</h1>
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
+      <div className="mx-auto w-full max-w-6xl">
+        {/* connection badge */}
+        <div className="mb-2 text-right">
+          <span className={`inline-block px-2 py-1 rounded text-xs ${conn==="online"?"bg-green-100 text-green-700":"bg-gray-200 text-gray-700"}`}>
+            {conn==="online" ? "Supabase connected" : "Local mode (not syncing)"}
+          </span>
+        </div>
 
-        <p className="mb-2 text-gray-600 text-lg font-bold text-center">Total Registered Players: {individuals.length}</p>
-        <h2 className="text-xl font-semibold mt-6 mb-2">Player&apos;s Full name</h2>
+        <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold mb-4 text-center sm:text-left">Perpetual Alumni Mini League</h1>
+          <form onSubmit={add} className="flex flex-col sm:flex-row gap-3">
+            <input className="flex-1 border rounded-xl px-3 py-2 h-11" placeholder="Enter full name" value={newName} onChange={e=>setNewName(e.target.value)} />
+            <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white">Add</button>
+          </form>
+        </div>
 
-        <form onSubmit={addIndividual} className="flex gap-2 mb-4">
-          <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Enter full name" className="flex-1 border rounded px-3 py-2" />
-          <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Add</button>
-        </form>
-
-        <ol className="list-decimal list-inside space-y-2">
-          {individuals.map((name, idx) => {
-            const assigned = Object.keys(teams).find(t => (teams[t]||[]).includes(name)) || "";
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+          {TEAMS.map(team=>{
+            const w=scores[team]?.win??0, l=scores[team]?.lose??0;
             return (
-              <li key={idx} className="flex items-center gap-4">
-                {editingIndex === idx ? (
-                  <>
-                    <input type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit(idx)} className="border rounded px-2 py-1" autoFocus />
-                    <button type="button" onClick={() => saveEdit(idx)} className="px-2 py-1 bg-green-600 text-white rounded">Save</button>
-                    <button type="button" onClick={() => { setEditingIndex(null); setEditingValue(""); }} className="px-2 py-1 bg-gray-400 text-white rounded">Cancel</button>
-                  </>
-                ) : (
-                  <span className="flex-1 font-medium text-left">
-                    {name}
-                    {paidStatus[name] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
-                  </span>
-                )}
-
-                <select value={assigned} onChange={(e) => moveIndividualToTeam(name, e.target.value)} className="border rounded px-2 py-1">
-                  <option value="">No Team</option>
-                  {TEAMS.map((key) => <option key={key} value={key}>Team {key}</option>)}
-                </select>
-
-                {editingIndex === idx ? null : (
-                  <>
-                    <button type="button" onClick={() => setEditingIndex(idx) || setEditingValue(name)} className="px-2 py-1 bg-yellow-500 text-white rounded">Edit</button>
-                    <button type="button" onClick={() => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); }} className="px-2 py-1 bg-red-500 text-white rounded">Delete</button>
-                    <button type="button" onClick={() => togglePaid(name)} className={`px-2 py-1 rounded ${paidStatus[name] ? "bg-green-700" : "bg-green-500"} text-white`}>
-                      {paidStatus[name] ? "Unmark Paid" : "Mark Paid"}
-                    </button>
-                  </>
-                )}
-              </li>
+              <section key={team} className="bg-white rounded-2xl shadow-sm border p-4 sm:p-5">
+                <h2 className="text-lg sm:text-xl font-semibold mb-3">
+                  Team {team}
+                  <span className="ml-3 text-sm font-normal">(<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)</span>
+                </h2>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <button type="button" onClick={()=>inc(team,"win", 1)} className="h-9 px-3 border rounded-lg">+W</button>
+                  <button type="button" onClick={()=>inc(team,"win",-1)} className="h-9 px-3 border rounded-lg">-W</button>
+                  <button type="button" onClick={()=>inc(team,"lose", 1)} className="h-9 px-3 border rounded-lg">+L</button>
+                  <button type="button" onClick={()=>inc(team,"lose",-1)} className="h-9 px-3 border rounded-lg">-L</button>
+                </div>
+                <ul className="space-y-2">
+                  {(teams[team]||[]).length ? (teams[team]||[]).map((m,idx)=>(
+                    <li key={m} className="flex items-center gap-2">
+                      <span className="font-medium w-6 text-right">{idx+1}.</span>
+                      <span className="flex-1">{m}{paid[m] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}</span>
+                      <button type="button" onClick={()=>assign(m,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white">Remove</button>
+                    </li>
+                  )) : <li className="text-gray-400">No players</li>}
+                </ul>
+              </section>
             );
           })}
-        </ol>
+        </div>
 
-        {Object.keys(teams).map((team) => {
-          const members = teams[team] || [];
-          const w = teamScores[team]?.win ?? 0;
-          const l = teamScores[team]?.lose ?? 0;
-          return (
-            <div key={team}>
-              <h2 className="text-xl font-semibold mt-6 mb-2">
-                Team {team}
-                <span className="ml-4 text-sm">
-                  (<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)
-                </span>
-              </h2>
-              <div className="flex gap-2 mb-2">
-                <button type="button" onClick={() => updateScore(team, "win", 1)} className="px-2 py-1 border rounded">+W</button>
-                <button type="button" onClick={() => updateScore(team, "win", -1)} className="px-2 py-1 border rounded">-W</button>
-                <button type="button" onClick={() => updateScore(team, "lose", 1)} className="px-2 py-1 border rounded">+L</button>
-                <button type="button" onClick={() => updateScore(team, "lose", -1)} className="px-2 py-1 border rounded">-L</button>
-                <button type="button" onClick={() => resetScores(team)} className="px-2 py-1 border rounded">Reset</button>
-              </div>
-              <ul className="list-inside space-y-1">
-                {members.length === 0 ? (
-                  <li className="text-gray-400">No players</li>
-                ) : (
-                  members.map((member, idx) => (
-                    <li key={idx} className="flex items-center gap-2">
-                      <span className="font-medium">{idx + 1}.</span>
-                      <span className="flex-1">
-                        {member}
-                        {paidStatus[member] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
-                      </span>
-                      <button type="button" onClick={() => removeFromTeam(team, member)} className="px-2 py-1 bg-red-500 text-white rounded">Remove</button>
-                    </li>
-                  ))
-                )}
-              </ul>
-            </div>
-          );
-        })}
+        <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mt-6">
+          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
+          <ol className="space-y-2">
+            {individuals.map((name)=>{
+              const assigned=Object.keys(teams).find(t=>teams[t].includes(name))||"";
+              return (
+                <li key={name} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                  <span className="flex-1 font-medium">
+                    {name}{paid[name] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={e=>assign(name,e.target.value)}>
+                      <option value="">No Team</option>
+                      {TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
+                    </select>
+                    <button type="button" onClick={()=>remove(name)} className="h-9 px-3 rounded-lg bg-red-500 text-white">Delete</button>
+                    <button type="button" onClick={()=>togglePaid(name)} className={`h-9 px-3 rounded-lg text-white ${paid[name]?"bg-green-700":"bg-green-500"}`}>
+                      {paid[name]?"Unmark Paid":"Mark Paid"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
 
-        <div className="mt-6 flex items-center gap-2">
-          <select value={clearOption} onChange={(e) => setClearOption(e.target.value)} className="border rounded px-3 py-2">
-            <option value="">Select Clear Option</option>
-            <option value="individuals">Clear Individuals</option>
-            <option value="teams">Clear Teams</option>
-          </select>
-          <button type="button" onClick={handleClearSelection} className="px-4 py-2 text-black border rounded">❌</button>
+        <div className="flex justify-center mt-6">
+          <button type="button" onClick={onLogout} className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white">Logout</button>
         </div>
       </div>
-
-      <div className="max-w-4xl mx-auto mt-4 text-center flex items-center justify-center gap-2">
-        <button type="button" onClick={onLogout} className="px-4 py-2 bg-red-600 text-white rounded">Logout</button>
-        <button type="button" onClick={() => setShowPwd(true)} className="px-4 py-2 bg-yellow-600 text-white rounded">Change Password</button>
-      </div>
-
-      {/* ===== Delete / Clear Modals (z-index fixed) ===== */}
-      {confirmType && awaitingConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40 z-40" onClick={cancelClear} />
-          <div className="relative bg-white rounded-lg shadow-lg p-6 z-50 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-2">Final Action</h3>
-            <p className="mb-4">
-              {confirmType === "individuals"
-                ? "Clear ALL individual registrations?"
-                : confirmType === "teams"
-                ? "Clear ALL team rosters?"
-                : "Delete this individual?"}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={cancelClear} className="px-4 py-2 border rounded">Cancel</button>
-              <button type="button" onClick={performClear} className="px-4 py-2 bg-red-600 text-white rounded">Confirm</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showPwd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40 z-40" onClick={() => setShowPwd(false)} />
-          <div className="relative bg-white rounded-lg shadow-lg p-6 z-50 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4">Change Password</h3>
-            {pwdErrors.length > 0 && (
-              <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
-                <ul className="list-disc list-inside">
-                  {pwdErrors.map((e, i) => <li key={i}>{e}</li>)}
-                </ul>
-              </div>
-            )}
-            {pwdSuccess && (
-              <div className="mb-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2">{pwdSuccess}</div>
-            )}
-            <form onSubmit={submitChangePassword} className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium mb-1">Current Password</label>
-                <input type="password" value={curPwd} onChange={(e) => setCurPwd(e.target.value)} className="w-full border rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">New Password</label>
-                <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full border rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Confirm New Password</label>
-                <input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} className="w-full border rounded px-3 py-2" />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowPwd(false)} className="px-4 py-2 border rounded">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">Save</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
-}
-
-/* ------------------------------ Entry wrapper ----------------------------- */
-export default function App() {
-  return <PerpetualGymLeagueApp />;
 }
