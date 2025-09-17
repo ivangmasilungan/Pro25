@@ -1,7 +1,60 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useState } from "react";
 
-// ---------- Helpers ----------
+/* ======================= Persisted Auth (Storage + Cookie) ======================= */
+function setCookie(name, value, days = 365) {
+  try {
+    const exp = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(value)}; Expires=${exp}; Path=/; SameSite=Lax`;
+  } catch {}
+}
+function getCookie(name) {
+  try {
+    const m = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+    return m ? decodeURIComponent(m[2]) : null;
+  } catch { return null; }
+}
+function delCookie(name) {
+  try { document.cookie = `${name}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`; } catch {}
+}
+
+/** Unified auth hook: tries cookie first, then localStorage. */
+function useAuthUser() {
+  const [user, setUser] = useState(() => {
+    // initial read synchronously (no flicker)
+    try {
+      const c = getCookie("auth_user");
+      if (c) return c;
+      const ls = localStorage.getItem("auth_user");
+      return ls ?? null;
+    } catch { return null; }
+  });
+
+  const login = (name) => {
+    try { localStorage.setItem("auth_user", name); } catch {}
+    setCookie("auth_user", name);
+    setUser(name);
+  };
+
+  const logout = () => {
+    try { localStorage.removeItem("auth_user"); } catch {}
+    delCookie("auth_user");
+    setUser(null);
+  };
+
+  // keep multiple tabs/windows in sync via storage events
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === "auth_user") setUser(e.newValue);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  return { user, login, logout };
+}
+
+/* ================================== Helpers ================================== */
 function safeLogoSrc(envUrl, globalUrl) {
   if (globalUrl && typeof globalUrl === "string") return globalUrl;
   if (envUrl && typeof envUrl === "string") return envUrl;
@@ -13,11 +66,11 @@ function nextScore(prev, type, delta) {
   return { ...prev, [type]: n };
 }
 
-// Demo credentials
+/* ============================= Demo credentials ============================== */
 let storedUsername = "Admin";
 let storedPassword = "@lum2025!";
 
-// ---------- Supabase-aware data helpers ----------
+/* ======================= Supabase-aware data helpers ======================== */
 const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams = TEAMS.reduce((acc,t)=>{acc[t]=[]; return acc;}, {});
 
@@ -42,7 +95,7 @@ async function sbUpdateScore(team, win, lose) {
   await window.sb.from("team_scores").upsert({ team, wins: win, losses: lose }, { onConflict: "team" });
 }
 
-// ---------- UI ----------
+/* ==================================== UI ==================================== */
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -52,11 +105,13 @@ function LoginPage({ onLogin }) {
     const globalUrl = (typeof window !== "undefined" && window.__APP_LOGO__) ? window.__APP_LOGO__ : undefined;
     return safeLogoSrc(envUrl, globalUrl);
   }, []);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (username === storedUsername && password === storedPassword) onLogin(username);
     else alert("Invalid credentials. Please try again.");
   };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-200">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md flex flex-col items-center">
@@ -78,8 +133,10 @@ function LoginPage({ onLogin }) {
 }
 
 function PerpetualGymLeagueApp() {
-  const [user, setUser] = useState(null);
-  return user ? <PerpetualGymLeague onLogout={() => setUser(null)} /> : <LoginPage onLogin={setUser} />;
+  const { user, login, logout } = useAuthUser();
+  return user
+    ? <PerpetualGymLeague onLogout={logout} />
+    : <LoginPage onLogin={login} />;
 }
 
 function PerpetualGymLeague({ onLogout }) {
@@ -171,9 +228,7 @@ function PerpetualGymLeague({ onLogout }) {
         for (const k in prev) copy[k] = prev[k].filter(m => m !== nameToDelete);
         return copy;
       });
-      setPaidStatus(prev => {
-        const ns = { ...prev }; delete ns[nameToDelete]; return ns;
-      });
+      setPaidStatus(prev => { const ns = { ...prev }; delete ns[nameToDelete]; return ns; });
       if (window.sb) await sbDeletePlayer(nameToDelete);
     }
     cancelClear();
@@ -216,8 +271,6 @@ function PerpetualGymLeague({ onLogout }) {
       await sbUpsertPlayer({ full_name: v, team, paid: !!paidStatus[v] });
     }
   };
-
-  const requestDeleteIndividual = (idx) => { setConfirmType("deleteIndividual"); setConfirmDeleteIndex(idx); setAwaitingConfirm(true); };
 
   const removeFromTeam = async (team, member) => {
     setTeams(prev => {
@@ -309,12 +362,14 @@ function PerpetualGymLeague({ onLogout }) {
 
         {Object.keys(teams).map((team) => {
           const members = teams[team] || [];
+          const w = teamScores[team]?.win ?? 0;
+          const l = teamScores[team]?.lose ?? 0;
           return (
             <div key={team}>
               <h2 className="text-xl font-semibold mt-6 mb-2">
                 Team {team}
                 <span className="ml-4 text-sm">
-                  (<span className="text-green-600">Win {teamScores[team].win}</span> / <span className="text-red-600">Lose {teamScores[team].lose}</span>)
+                  (<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)
                 </span>
               </h2>
               <div className="flex gap-2 mb-2">
@@ -423,7 +478,7 @@ function PerpetualGymLeague({ onLogout }) {
   );
 }
 
-// ---- Default export used by main.jsx
+/* =============================== Entry wrapper =============================== */
 export default function App() {
   return <PerpetualGymLeagueApp />;
 }
