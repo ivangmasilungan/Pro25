@@ -1,33 +1,32 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase as SB, pingSupabase } from "./lib/supabase";
+import { supabase as SB } from "./lib/supabase";
 
-/* ======= auth kept simple (cookie + localStorage) ======= */
-function setCookie(n,v,d=365){try{document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}catch{}}
-function getCookie(n){try{const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null;}catch{return null}}
-function delCookie(n){try{document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`;}catch{}}
+/* ========== auth (cookie + localStorage) ========== */
+function setCookie(n,v,d=365){document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}
+function getCookie(n){const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null}
+function delCookie(n){document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`}
 function useAuthUser(){
   const [user,setUser]=useState(()=>getCookie("auth_user")||localStorage.getItem("auth_user")||null);
-  const login =(name)=>{try{localStorage.setItem("auth_user",name);}catch{}; setCookie("auth_user",name); setUser(name);};
-  const logout=()=>{try{localStorage.removeItem("auth_user");}catch{}; delCookie("auth_user"); setUser(null);};
+  const login =(name)=>{localStorage.setItem("auth_user",name); setCookie("auth_user",name); setUser(name);};
+  const logout=()=>{localStorage.removeItem("auth_user"); delCookie("auth_user"); setUser(null);};
   useEffect(()=>{const onStorage=e=>{if(e.key==="auth_user") setUser(e.newValue)}; window.addEventListener("storage",onStorage); return()=>window.removeEventListener("storage",onStorage)},[]);
   return {user,login,logout};
 }
 
-/* ======= local snapshot (refresh-safe) ======= */
-const LS_KEY="paml:v4";
+/* ========== local snapshot (refresh-safe) ========== */
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
+const LS_KEY="paml:v4";
 const loadLocal =()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}};
 const saveLocal =(state)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(state));}catch{}};
-const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
-const safeLogo=(envUrl,globalUrl)=>globalUrl||envUrl||"/sports_logo.jpg";
+const nextScore =(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
 
-/* ======= demo creds (can be env-driven) ======= */
+/* ========== demo creds (env override) ========== */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
 let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
 
-/* ======= Supabase helpers ======= */
+/* ========== Supabase helpers ========== */
 async function sbFetchAll(){
   const [{data:players, error:e1},{data:scores, error:e2}] = await Promise.all([
     SB.from("players").select("full_name,team,paid").order("full_name",{ascending:true}),
@@ -47,16 +46,13 @@ async function sbBulkUpsert(local){
   if (r1.error||r2.error) throw (r1.error||r2.error);
 }
 
-/* ======= UI ======= */
-function Login({onLogin}){
-  const [u,setU]=useState(""); const [p,setP]=useState(""); const [hide,setHide]=useState(false);
-  const logo=useMemo(()=>safeLogo(import.meta.env?.VITE_LOGO_URL, typeof window!=="undefined"?window.__APP_LOGO__:undefined),[]);
-  return(
+/* ========== Login ========== */
+function Login({ onLogin }){
+  const [u,setU]=useState(""); const [p,setP]=useState("");
+  return (
     <div className="min-h-screen grid place-items-center bg-slate-50 p-6">
-      <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-lg text-center">
-        {!hide ? <img src={logo} alt="Logo" className="w-28 h-28 mx-auto mb-6 object-contain" onError={()=>setHide(true)}/> :
-          <div className="w-28 h-28 mx-auto mb-6 rounded-full bg-gray-100 grid place-items-center text-xs text-gray-500">No Logo</div>}
-        <h1 className="text-2xl font-bold mb-6">Login</h1>
+      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
+        <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
         <form onSubmit={(e)=>{e.preventDefault(); if(u===storedUsername && p===storedPassword) onLogin(u); else alert("Invalid");}} className="space-y-3">
           <input className="w-full border rounded-lg px-3 py-2" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
           <input className="w-full border rounded-lg px-3 py-2" type="password" placeholder="Password" value={p} onChange={e=>setP(e.target.value)} />
@@ -67,89 +63,116 @@ function Login({onLogin}){
   );
 }
 
+/* ========== App Shell ========== */
 export default function App(){
   const {user,login,logout}=useAuthUser();
   return user ? <League onLogout={logout}/> : <Login onLogin={login}/>;
 }
 
-function League({onLogout}){
+/* ========== Main League ========== */
+function League({ onLogout }){
   const [individuals,setIndividuals]=useState([]);
   const [teams,setTeams]=useState(emptyTeams);
   const [paid,setPaid]=useState({});
   const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
   const [newName,setNewName]=useState("");
 
-  // connection status + error
-  const [conn,setConn]=useState("checking"); // 'online' | 'local' | 'checking'
+  const [conn,setConn]=useState("checking"); // "online" | "local" | "checking"
   const [connErr,setConnErr]=useState("");
 
-  // edit name
   const [editingName,setEditingName]=useState(null);
   const [editingValue,setEditingValue]=useState("");
 
-// ===== initial sync (force-correct online detection) =====
-useEffect(() => {
-  (async () => {
-    const localSnap = loadLocal();
+  /* ---------- helpers to apply state ---------- */
+  function applyRemote(remote){
+    const {players, scores:ts}=remote||{players:[],scores:[]};
+    setIndividuals(players.map(p=>p.full_name));
+    const t=TEAMS.reduce((a,k)=>{a[k]=[];return a;},{});
+    players.forEach(p=>{ if(p.team && t[p.team]) t[p.team].push(p.full_name); });
+    setTeams(t);
+    setPaid(players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}));
+    const s=TEAMS.reduce((a,k)=>{a[k]={win:0,lose:0};return a;},{});
+    (ts||[]).forEach(r=>{ if(s[r.team]) s[r.team]={win:r.wins||0,lose:r.losses||0}; });
+    setScores(s);
+    saveLocal({individuals:players.map(p=>p.full_name),teams:t,paid:players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}),scores:s});
+  }
+  function applyLocal(snap){
+    setIndividuals(snap.individuals||[]);
+    setTeams(snap.teams||emptyTeams);
+    setPaid(snap.paid||{});
+    setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
+  }
 
-    if (window.sb) {
+  /* ---------- initial sync: prove online first ---------- */
+  useEffect(() => {
+    (async () => {
+      const localSnap=loadLocal();
+
+      if (window.sb) {
+        try {
+          const { error } = await window.sb.from("players").select("full_name").limit(1);
+          if (error) throw error;
+
+          setConn("online");
+          setConnErr("");
+          const remote = await sbFetchAll();
+          if ((remote.players||[]).length===0 && localSnap && (localSnap.individuals||[]).length>0) {
+            await sbBulkUpsert(localSnap);
+            applyRemote(await sbFetchAll());
+          } else {
+            applyRemote(remote);
+          }
+          return;
+        } catch (err) {
+          setConn("local");
+          setConnErr(String(err?.message||err));
+        }
+      } else {
+        setConn("local");
+        setConnErr("Supabase client not created (check VITE_SUPABASE_* envs and import './lib/supabase.js').");
+      }
+
+      if (localSnap) applyLocal(localSnap);
+    })();
+  }, []);
+
+  /* ---------- manual tester exposed to Console ---------- */
+  useEffect(() => {
+    window.__testLive = async () => {
       try {
-        // 1) simple ping to prove connectivity + RLS
         const { error } = await window.sb.from("players").select("full_name").limit(1);
         if (error) throw error;
-
-        // 2) ONLINE
-        console.log("[conn] Supabase OK → online");
         setConn("online");
         setConnErr("");
-
-        // 3) fetch remote and apply; seed if DB empty
-        const remote = await sbFetchAll();
-        if ((remote.players || []).length === 0 && localSnap && (localSnap.individuals || []).length > 0) {
-          await sbBulkUpsert(localSnap);             // seed once from local snapshot
-          const refetched = await sbFetchAll();
-          applyRemote(refetched);
-        } else {
-          applyRemote(remote);
-        }
-        return;
-      } catch (err) {
-        console.warn("[conn] ping failed, going local:", err);
+        console.log("[conn] forced online via __testLive()");
+      } catch (e) {
         setConn("local");
-        setConnErr(String(err?.message || err));
+        setConnErr(String(e?.message || e));
+        console.log("[conn] forced local via __testLive()", e);
       }
-    } else {
-      setConn("local");
-      setConnErr("Supabase client not created (check VITE_SUPABASE_* and import './lib/supabase.js').");
-    }
+    };
+    return () => { delete window.__testLive; };
+  }, []);
 
-    if (localSnap) applyLocal(localSnap);            // fallback to local snapshot
-  })();
-}, []);
+  /* ---------- realtime (optional) ---------- */
+  useEffect(()=>{
+    if (!SB) return;
+    const ch=SB.channel("league-sync")
+      .on("postgres_changes",{event:"*",schema:"public",table:"players"},()=>refetch())
+      .on("postgres_changes",{event:"*",schema:"public",table:"team_scores"},()=>refetch())
+      .subscribe();
+    async function refetch(){ try{ applyRemote(await sbFetchAll()); }catch(e){ console.warn("realtime fetch failed",e); } }
+    return ()=>{ try{SB.removeChannel(ch);}catch{} };
+  },[]);
 
-// ===== manual connection tester callable from Console =====
-useEffect(() => {
-  window.__testLive = async () => {
-    try {
-      const { error } = await window.sb.from("players").select("full_name").limit(1);
-      if (error) throw error;
-      setConn("online");
-      setConnErr("");
-      console.log("[conn] forced online via __testLive()");
-    } catch (e) {
-      setConn("local");
-      setConnErr(String(e?.message || e));
-      console.log("[conn] forced local via __testLive()", e);
-    }
-  };
-  return () => { delete window.__testLive; };
-}, []);
+  /* ---------- persist local on any change ---------- */
+  useEffect(()=>{ saveLocal({individuals,teams,paid,scores}); },[individuals,teams,paid,scores]);
 
-  /* ===== actions ===== */
-  const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return; setNewName(""); setIndividuals(p=>p.concat(v)); if(SB) try{ await sbUpsertPlayer({full_name:v,team:null,paid:false}); }catch(e){setConn("local");setConnErr(String(e?.message||e));}};
-  const assign = async(name,team)=>{ setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;}); if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name]}); }catch(e){setConn("local");setConnErr(String(e?.message||e));}};
-  const togglePaid = async(name)=>{ setPaid(prev=>({...prev,[name]:!prev[name]})); if(SB) try{ const t=Object.keys(teams).find(k=>teams[k].includes(name))||null; await sbUpsertPlayer({full_name:name,team:t,paid:!paid[name]}); }catch(e){setConn("local");setConnErr(String(e?.message||e));}};
-  const remove = async(name)=>{ setIndividuals(prev=>prev.filter(n=>n!==name)); setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==name); return c;}); setPaid(prev=>{const n={...prev}; delete n[name]; return n;}); if(SB) try{ await sbDeletePlayer(name);}catch(e){setConn("local");setConnErr(String(e?.message||e));}};
+  /* ---------- actions ---------- */
+  const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return; setNewName(""); setIndividuals(p=>p.concat(v)); if(SB) try{ await sbUpsertPlayer({full_name:v,team:null,paid:false}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
+  const assign = async(name,team)=>{ setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;}); if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
+  const togglePaid = async(name)=>{ setPaid(prev=>({...prev,[name]:!prev[name]})); if(SB) try{ const t=Object.keys(teams).find(k=>teams[k].includes(name))||null; await sbUpsertPlayer({full_name:name,team:t,paid:!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
+  const remove = async(name)=>{ setIndividuals(prev=>prev.filter(n=>n!==name)); setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==name); return c;}); setPaid(prev=>{const n={...prev}; delete n[name]; return n;}); if(SB) try{ await sbDeletePlayer(name);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
 
   // edit name
   const beginEdit =(name)=>{ setEditingName(name); setEditingValue(name); };
@@ -160,13 +183,13 @@ useEffect(() => {
     setIndividuals(prev=>prev.map(n=>n===oldName?newName:n));
     setTeams(prev=>{const c={}; for(const t in prev) c[t]=(prev[t]||[]).map(m=>m===oldName?newName:m); return c;});
     setPaid(prev=>{const np={...prev}; if(np[oldName]) np[newName]=np[oldName]; delete np[oldName]; return np;});
-    if(SB){ try{ const team=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldName))||null; const wasPaid=!!paid[oldName]; await sbUpsertPlayer({full_name:newName,team,paid:wasPaid}); await sbDeletePlayer(oldName);}catch(e){setConn("local");setConnErr(String(e?.message||e));} }
+    if(SB){ try{ const team=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldName))||null; const wasPaid=!!paid[oldName]; await sbUpsertPlayer({full_name:newName,team,paid:wasPaid}); await sbDeletePlayer(oldName);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     cancelEdit();
   };
 
-  const inc = async(team,type,delta)=>{ setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)})); if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win" ? {win:Math.max(0,cur.win+delta),lose:cur.lose} : {win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){setConn("local");setConnErr(String(e?.message||e));} };
+  const inc = async(team,type,delta)=>{ setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)})); if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win" ? {win:Math.max(0,cur.win+delta),lose:cur.lose} : {win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } };
 
-  /* ===== render ===== */
+  /* ---------- UI ---------- */
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-6xl">
@@ -184,7 +207,7 @@ useEffect(() => {
         <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold mb-4 text-center sm:text-left">Perpetual Alumni Mini League</h1>
           <form onSubmit={add} className="flex flex-col sm:flex-row gap-3">
-            <input className="flex-1 border rounded-xl px-3 py-2 h-11" placeholder="Enter full name" value={newName} onChange={e=>setNewName(e.target.value)} />
+            <input className="flex-1 border rounded-xl px-3 py-2 h-11" placeholder="Enter full name" value={newName} onChange={(e)=>setNewName(e.target.value)} />
             <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white">Add</button>
           </form>
         </div>
