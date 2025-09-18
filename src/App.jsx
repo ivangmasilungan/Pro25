@@ -87,68 +87,63 @@ function League({onLogout}){
   const [editingName,setEditingName]=useState(null);
   const [editingValue,setEditingValue]=useState("");
 
-  /* ===== initial sync ===== */
-  useEffect(()=>{(async()=>{
-    const localSnap=loadLocal();
+// ===== initial sync (force-correct online detection) =====
+useEffect(() => {
+  (async () => {
+    const localSnap = loadLocal();
 
-    if (SB) {
+    if (window.sb) {
       try {
-        await pingSupabase();                 // proves env + RLS are OK
+        // 1) simple ping to prove connectivity + RLS
+        const { error } = await window.sb.from("players").select("full_name").limit(1);
+        if (error) throw error;
+
+        // 2) ONLINE
+        console.log("[conn] Supabase OK → online");
         setConn("online");
-        const res=await sbFetchAll();
-        if ((res.players||[]).length===0 && localSnap && (localSnap.individuals||[]).length>0) {
-          await sbBulkUpsert(localSnap);      // seed cloud from local once
-          const res2=await sbFetchAll();
-          applyRemote(res2);
+        setConnErr("");
+
+        // 3) fetch remote and apply; seed if DB empty
+        const remote = await sbFetchAll();
+        if ((remote.players || []).length === 0 && localSnap && (localSnap.individuals || []).length > 0) {
+          await sbBulkUpsert(localSnap);             // seed once from local snapshot
+          const refetched = await sbFetchAll();
+          applyRemote(refetched);
         } else {
-          applyRemote(res);
+          applyRemote(remote);
         }
         return;
       } catch (err) {
-        console.warn("[supabase] falling back to local:", err);
+        console.warn("[conn] ping failed, going local:", err);
         setConn("local");
-        setConnErr(String(err?.message||err));
+        setConnErr(String(err?.message || err));
       }
     } else {
       setConn("local");
-      setConnErr("client-not-created (check VITE_SUPABASE_* envs and import './lib/supabase.js')");
+      setConnErr("Supabase client not created (check VITE_SUPABASE_* and import './lib/supabase.js').");
     }
 
-    if (localSnap) applyLocal(localSnap);
-  })();},[]);
+    if (localSnap) applyLocal(localSnap);            // fallback to local snapshot
+  })();
+}, []);
 
-  function applyRemote(remote){
-    const {players, scores:ts}=remote||{players:[],scores:[]};
-    setIndividuals(players.map(p=>p.full_name));
-    const t=TEAMS.reduce((a,k)=>{a[k]=[];return a;},{});
-    players.forEach(p=>{ if(p.team && t[p.team]) t[p.team].push(p.full_name); });
-    setTeams(t);
-    setPaid(players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}));
-    const s=TEAMS.reduce((a,k)=>{a[k]={win:0,lose:0};return a;},{});
-    (ts||[]).forEach(r=>{ if(s[r.team]) s[r.team]={win:r.wins||0,lose:r.losses||0}; });
-    setScores(s);
-    saveLocal({individuals:players.map(p=>p.full_name),teams:t,paid:players.reduce((a,p)=>{a[p.full_name]=!!p.paid;return a;},{}),scores:s});
-  }
-  function applyLocal(snap){
-    setIndividuals(snap.individuals||[]);
-    setTeams(snap.teams||emptyTeams);
-    setPaid(snap.paid||{});
-    setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
-  }
-
-  /* persist to local on every change */
-  useEffect(()=>{ saveLocal({individuals,teams,paid,scores}); },[individuals,teams,paid,scores]);
-
-  /* realtime cross-device (optional; only if SB exists) */
-  useEffect(()=>{
-    if (!SB) return;
-    const ch=SB.channel("league-sync")
-      .on("postgres_changes",{event:"*",schema:"public",table:"players"},()=>refetch())
-      .on("postgres_changes",{event:"*",schema:"public",table:"team_scores"},()=>refetch())
-      .subscribe();
-    async function refetch(){ try{ const r=await sbFetchAll(); applyRemote(r);}catch(e){console.warn("realtime fetch failed",e);} }
-    return ()=>{ try{SB.removeChannel(ch);}catch{} };
-  },[]);
+// ===== manual connection tester callable from Console =====
+useEffect(() => {
+  window.__testLive = async () => {
+    try {
+      const { error } = await window.sb.from("players").select("full_name").limit(1);
+      if (error) throw error;
+      setConn("online");
+      setConnErr("");
+      console.log("[conn] forced online via __testLive()");
+    } catch (e) {
+      setConn("local");
+      setConnErr(String(e?.message || e));
+      console.log("[conn] forced local via __testLive()", e);
+    }
+  };
+  return () => { delete window.__testLive; };
+}, []);
 
   /* ===== actions ===== */
   const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return; setNewName(""); setIndividuals(p=>p.concat(v)); if(SB) try{ await sbUpsertPlayer({full_name:v,team:null,paid:false}); }catch(e){setConn("local");setConnErr(String(e?.message||e));}};
