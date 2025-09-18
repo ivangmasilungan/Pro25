@@ -1,8 +1,8 @@
 // src/App.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase as SB } from "./lib/supabase";
 
-/* ========== auth (cookie + localStorage) ========== */
+/* ================== auth (cookie + localStorage) ================== */
 function setCookie(n,v,d=365){document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}
 function getCookie(n){const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null}
 function delCookie(n){document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`}
@@ -14,7 +14,7 @@ function useAuthUser(){
   return {user,login,logout};
 }
 
-/* ========== local snapshot (refresh-safe) ========== */
+/* ================== local snapshot (refresh-safe) ================== */
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
 const LS_KEY="paml:v4";
@@ -22,11 +22,11 @@ const loadLocal =()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.par
 const saveLocal =(state)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(state));}catch{}};
 const nextScore =(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
 
-/* ========== demo creds (env override) ========== */
+/* ================== demo creds (override via env) ================== */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
 let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
 
-/* ========== Supabase helpers ========== */
+/* ================== Supabase helpers ================== */
 async function sbFetchAll(){
   const [{data:players, error:e1},{data:scores, error:e2}] = await Promise.all([
     SB.from("players").select("full_name,team,paid").order("full_name",{ascending:true}),
@@ -46,7 +46,7 @@ async function sbBulkUpsert(local){
   if (r1.error||r2.error) throw (r1.error||r2.error);
 }
 
-/* ========== Login ========== */
+/* ================== Login ================== */
 function Login({ onLogin }){
   const [u,setU]=useState(""); const [p,setP]=useState("");
   return (
@@ -63,13 +63,13 @@ function Login({ onLogin }){
   );
 }
 
-/* ========== App Shell ========== */
+/* ================== App Shell ================== */
 export default function App(){
   const {user,login,logout}=useAuthUser();
   return user ? <League onLogout={logout}/> : <Login onLogin={login}/>;
 }
 
-/* ========== Main League ========== */
+/* ================== Main League ================== */
 function League({ onLogout }){
   const [individuals,setIndividuals]=useState([]);
   const [teams,setTeams]=useState(emptyTeams);
@@ -82,6 +82,10 @@ function League({ onLogout }){
 
   const [editingName,setEditingName]=useState(null);
   const [editingValue,setEditingValue]=useState("");
+
+  // New: flash + scroll new item
+  const [flashName,setFlashName]=useState(null);
+  const itemRefs=useRef({}); // name -> element
 
   /* ---------- helpers to apply state ---------- */
   function applyRemote(remote){
@@ -169,12 +173,45 @@ function League({ onLogout }){
   useEffect(()=>{ saveLocal({individuals,teams,paid,scores}); },[individuals,teams,paid,scores]);
 
   /* ---------- actions ---------- */
-  const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return; setNewName(""); setIndividuals(p=>p.concat(v)); if(SB) try{ await sbUpsertPlayer({full_name:v,team:null,paid:false}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
-  const assign = async(name,team)=>{ setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;}); if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
-  const togglePaid = async(name)=>{ setPaid(prev=>({...prev,[name]:!prev[name]})); if(SB) try{ const t=Object.keys(teams).find(k=>teams[k].includes(name))||null; await sbUpsertPlayer({full_name:name,team:t,paid:!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
-  const remove = async(name)=>{ setIndividuals(prev=>prev.filter(n=>n!==name)); setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==name); return c;}); setPaid(prev=>{const n={...prev}; delete n[name]; return n;}); if(SB) try{ await sbDeletePlayer(name);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }};
+  const add = async(e)=>{
+    e.preventDefault();
+    const v=newName.trim();
+    if(!v) return;
 
-  // edit name
+    setNewName("");
+
+    // Put new player on TOP, show immediately
+    setIndividuals(prev => [v, ...prev]);
+
+    // Persist (if SB configured)
+    if(SB){
+      try{ await sbUpsertPlayer({ full_name:v, team:null, paid:false }); }
+      catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+    }
+
+    // Flash and scroll into view
+    setFlashName(v);
+    setTimeout(()=>{ const el=itemRefs.current[v]; if(el?.scrollIntoView) el.scrollIntoView({behavior:"smooth",block:"center"}); }, 50);
+    setTimeout(()=>setFlashName(null), 1500);
+  };
+
+  const assign = async(name,team)=>{
+    setTeams(prev=>{const copy=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) copy[team]=[...(copy[team]||[]),name]; return copy;});
+    if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+  };
+
+  const togglePaid = async(name)=>{
+    setPaid(prev=>({...prev,[name]:!prev[name]}));
+    if(SB) try{ const t=Object.keys(teams).find(k=>teams[k].includes(name))||null; await sbUpsertPlayer({full_name:name,team:t,paid:!paid[name]}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+  };
+
+  const remove = async(name)=>{
+    setIndividuals(prev=>prev.filter(n=>n!==name));
+    setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==name); return c;});
+    setPaid(prev=>{const n={...prev}; delete n[name]; return n;});
+    if(SB) try{ await sbDeletePlayer(name);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+  };
+
   const beginEdit =(name)=>{ setEditingName(name); setEditingValue(name); };
   const cancelEdit =()=>{ setEditingName(null); setEditingValue(""); };
   const saveEdit   =async()=> {
@@ -187,7 +224,14 @@ function League({ onLogout }){
     cancelEdit();
   };
 
-  const inc = async(team,type,delta)=>{ setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)})); if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win" ? {win:Math.max(0,cur.win+delta),lose:cur.lose} : {win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } };
+  const inc = async(team,type,delta)=>{
+    setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
+    if(SB) try{
+      const cur=scores[team]||{win:0,lose:0};
+      const nv= type==="win" ? {win:Math.max(0,cur.win+delta),lose:cur.lose} : {win:cur.win,lose:Math.max(0,cur.lose+delta)};
+      await sbUpsertScore(team,nv.win,nv.lose);
+    }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+  };
 
   /* ---------- UI ---------- */
   return (
@@ -229,7 +273,11 @@ function League({ onLogout }){
                 </div>
                 <ul className="space-y-2">
                   {(teams[team]||[]).length ? (teams[team]||[]).map((m,idx)=>(
-                    <li key={m} className="flex items-center gap-2">
+                    <li
+                      key={m}
+                      ref={el => { if (el) itemRefs.current[m] = el; }}
+                      className="flex items-center gap-2 rounded-lg"
+                    >
                       <span className="font-medium w-6 text-right">{idx+1}.</span>
                       <span className="flex-1">{m}{paid[m] && <span className="ml-2 text-green-600 font-semibold">(Paid)</span>}</span>
                       <button type="button" onClick={()=>assign(m,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white">Remove</button>
@@ -247,7 +295,14 @@ function League({ onLogout }){
             {individuals.map((name)=>{
               const assigned=Object.keys(teams).find(t=>teams[t].includes(name))||"";
               return (
-                <li key={name} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <li
+                  key={name}
+                  ref={el => { if (el) itemRefs.current[name] = el; }}
+                  className={
+                    "flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 " +
+                    (flashName===name ? "bg-yellow-50 ring-1 ring-yellow-200 transition-colors" : "")
+                  }
+                >
                   {editingName === name ? (
                     <div className="flex items-center gap-2 w-full">
                       <input className="border rounded-lg px-2 py-2 flex-1" value={editingValue} onChange={(e)=>setEditingValue(e.target.value)} onKeyDown={(e)=>e.key==="Enter" && saveEdit()} autoFocus />
