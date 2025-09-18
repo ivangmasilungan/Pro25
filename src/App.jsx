@@ -16,26 +16,31 @@ function useAuthUser(){
 
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-const LS_KEY="paml:v9-public-link";
+const LS_KEY="paml:v12-autowinloss";
 const loadLocal=()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}}
 const saveLocal=(s)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(s));}catch{}}
 const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
 
-/* Winner utility (derived, not persisted) */
-function computeWinner(g){
-  const a = Number(g?.score_a ?? 0);
-  const b = Number(g?.score_b ?? 0);
-  const ta = g?.team_a || "";
-  const tb = g?.team_b || "";
-  if (!ta && !tb) return { key:"", label:"TBD" };
-  if (a > b && ta) return { key: ta, label: `Team ${ta}` };
-  if (b > a && tb) return { key: tb, label: `Team ${tb}` };
-  return { key:"", label: (ta||tb) ? "Tie" : "TBD" };
+/* outcome helpers */
+function getOutcome(game){
+  const ta=game?.team_a||""; const tb=game?.team_b||"";
+  const a = Number(game?.score_a ?? 0);
+  const b = Number(game?.score_b ?? 0);
+  if(!ta || !tb) return {type:"invalid"};
+  if(a===b)      return {type:"tie", a:ta, b:tb};
+  if(a>b)        return {type:"decided", winner:ta, loser:tb};
+  return {type:"decided", winner:tb, loser:ta};
+}
+function winnerLabel(g){
+  const oc=getOutcome(g);
+  if(oc.type==="decided") return `Team ${oc.winner}`;
+  if(oc.type==="tie") return "Tie";
+  return "TBD";
 }
 
 /* ------------------------------ credentials ------------------------------ */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
-let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
+let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "Dir2";
 
 /* -------------------------- Supabase data helpers ------------------------ */
 async function sbFetchAll(){
@@ -122,8 +127,8 @@ function League({ onLogout }){
 
   const [games,setGames]=useState([]);
   const [gTitle,setGTitle]=useState(""); const [gDate,setGDate]=useState(""); const [gTime,setGTime]=useState(""); const [gLoc,setGLoc]=useState("");
-  const [gTeamA,setGTeamA]=useState(""); const [gTeamB,setGTeamB]=useState(""); const [gScoreA,setGScoreA]=useState(0); const [gScoreB,setGScoreB]=useState(0);
-  const [editGame,setEditGame]=useState(null); const [showGameEditModal,setShowGameEditModal]=useState(false);
+  const [gTeamA,setGTeamA]=useState(""); const [gTeamB,setGTeamB]=useState("");
+  const [editLocal,setEditLocal]=useState(null); const [showGameEditModal,setShowGameEditModal]=useState(false);
 
   const makeLocal = (extra={}) => ({ individuals,teams,paid,scores,games, ...extra });
   const applyRemote = (remote)=>{
@@ -197,11 +202,15 @@ function League({ onLogout }){
   };
   const inc = async(team,type,delta)=>{ setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
     if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win"?{win:Math.max(0,cur.win+delta),lose:cur.lose}:{win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){setConn("local"); setConnErr(String(e?.message||e));}};
+
+  /* ---------- payments ---------- */
   const openPayment=(n)=>{ setPayFor(n); setShowPayModal(true); };
   const setPayment=async(method)=>{ const name=payFor; if(!name) return; setPaid(prev=>{const np={...prev}; if(method) np[name]=method; else delete np[name]; return np;});
     if(SB){ try{ const team=Object.keys(teams).find(t=>(teams[t]||[]).includes(name))||null; await sbUpsertPlayer({full_name:name,team,paid:!!method,payment_method:method}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowPayModal(false); setPayFor(null);
   };
+
+  /* ---------- delete / clear / logout prompts ---------- */
   const requestDelete=(n)=>{ setDeleteTarget(n); setShowDeleteModal(true); };
   const doDelete=async()=>{ const n=deleteTarget; if(!n){setShowDeleteModal(false);return;}
     setIndividuals(prev=>prev.filter(x=>x!==n));
@@ -215,24 +224,99 @@ function League({ onLogout }){
   };
   const doLogout=()=>{ setShowLogoutModal(false); onLogout(); };
 
-  const resetGameForm=()=>{ setGTitle(""); setGDate(""); setGTime(""); setGLoc(""); setGTeamA(""); setGTeamB(""); setGScoreA(0); setGScoreB(0); };
+  /* ---------- game creation (no scores on create) ---------- */
+  const resetGameForm=()=>{ setGTitle(""); setGDate(""); setGTime(""); setGLoc(""); setGTeamA(""); setGTeamB(""); };
   const defaultTitle=()=>`Game ${(games?.length||0)+1}`;
   const addGame=async(e)=>{ e.preventDefault();
-    const row={ title:(gTitle||"").trim()||defaultTitle(), team_a:gTeamA||null, team_b:gTeamB||null, gdate:gDate||null, gtime:gTime||null, location:gLoc||null, score_a:Number(gScoreA)||0, score_b:Number(gScoreB)||0 };
-    if(SB){ try{ const ins=await sbInsertGame(row); setGames(prev=>[...prev,{ id:ins.id, title:ins.title, team_a:ins.team_a||"", team_b:ins.team_b||"", gdate:ins.gdate||"", gtime:ins.gtime||"", location:ins.location||"", score_a:Number.isFinite(ins.score_a)?ins.score_a:Number(gScoreA)||0, score_b:Number.isFinite(ins.score_b)?ins.score_b:Number(gScoreB)||0 }]); }
-      catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
+    const row={
+      title:(gTitle||"").trim()||defaultTitle(), team_a:gTeamA||null, team_b:gTeamB||null,
+      gdate:gDate||null, gtime:gTime||null, location:gLoc||null,
+      score_a:0, score_b:0
+    };
+    if(SB){ try{
+      const ins=await sbInsertGame(row);
+      setGames(prev=>[...prev,{ id:ins.id, title:ins.title, team_a:ins.team_a||"", team_b:ins.team_b||"", gdate:ins.gdate||"", gtime:ins.gtime||"", location:ins.location||"", score_a:ins.score_a||0, score_b:ins.score_b||0 }]);
+    }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
     else setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]);
     resetGameForm();
   };
-  const requestEditGame=(g)=>{ setEditGame({...g}); setShowGameEditModal(true); };
-  const saveGameEdit=async()=>{ const g=editGame; if(!g) return; const id=g.id;
-    const row={ title:(g.title||"").trim()||"Game", team_a:g.team_a||null, team_b:g.team_b||null, gdate:g.gdate||null, gtime:g.gtime||null, location:g.location||null, score_a:Number(g.score_a)||0, score_b:Number(g.score_b)||0 };
-    setGames(prev=>prev.map(x=>x.id===id?{...x,...row}:x)); if(SB){ try{ await sbUpdateGame(id,row);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
-    setShowGameEditModal(false); setEditGame(null);
-  };
-  const deleteGame=async(id)=>{ setGames(prev=>prev.filter(g=>g.id!==id)); if(SB){ try{ await sbDeleteGame(id);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } } };
 
-  const rosterFor = (letter)=> letter && teams[letter] ? teams[letter] : [];
+  /* ---------- auto W/L adjustment helpers ---------- */
+  const applyTeamDeltas = async (deltas) => {
+    if (!deltas || deltas.length===0) return;
+    let snapshot={};
+    setScores(prev=>{
+      const next={...prev};
+      deltas.forEach(({team,winDelta=0,loseDelta=0})=>{
+        const cur=next[team]||{win:0,lose:0};
+        next[team]={win:Math.max(0,(cur.win||0)+winDelta),lose:Math.max(0,(cur.lose||0)+loseDelta)};
+      });
+      snapshot=next;
+      return next;
+    });
+    if (SB){
+      for (const {team} of deltas){
+        const t=snapshot[team]||{win:0,lose:0};
+        try{ await sbUpsertScore(team,t.win,t.lose);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+      }
+    }
+  };
+
+  const adjustRecordsFromChange = async (oldGame, newGame) => {
+    const oldOc=getOutcome(oldGame);
+    const newOc=getOutcome(newGame);
+    const deltas=[];
+
+    if (oldOc.type==="decided" && newOc.type==="decided"){
+      if (oldOc.winner!==newOc.winner || oldOc.loser!==newOc.loser){
+        deltas.push({team:oldOc.winner,winDelta:-1,loseDelta:0});
+        deltas.push({team:oldOc.loser, winDelta:0, loseDelta:-1});
+        deltas.push({team:newOc.winner,winDelta:+1,loseDelta:0});
+        deltas.push({team:newOc.loser, winDelta:0, loseDelta:+1});
+      }
+    }else if (oldOc.type!=="decided" && newOc.type==="decided"){
+      deltas.push({team:newOc.winner,winDelta:+1,loseDelta:0});
+      deltas.push({team:newOc.loser, winDelta:0, loseDelta:+1});
+    }else if (oldOc.type==="decided" && newOc.type!=="decided"){
+      deltas.push({team:oldOc.winner,winDelta:-1,loseDelta:0});
+      deltas.push({team:oldOc.loser, winDelta:0, loseDelta:-1});
+    }
+
+    if (deltas.length) await applyTeamDeltas(deltas);
+  };
+
+  /* ---------- edit & delete games (scores editable here) ---------- */
+  const requestEditGame=(g)=>{ setEditLocal({...g}); setShowGameEditModal(true); };
+  const saveGameEdit=async()=>{ const g=editLocal; if(!g) return; const id=g.id;
+    const oldGame=games.find(x=>x.id===id)||{};
+    const row={
+      title:(g.title||"").trim()||"Game",
+      team_a:g.team_a||null, team_b:g.team_b||null,
+      gdate:g.gdate||null, gtime:g.gtime||null, location:g.location||null,
+      score_a:Number(g.score_a)||0, score_b:Number(g.score_b)||0
+    };
+    setGames(prev=>prev.map(x=>x.id===id?{...x,...row}:x));
+    await adjustRecordsFromChange(oldGame,{...oldGame,...row});
+    if(SB){ try{ await sbUpdateGame(id,row);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
+    setShowGameEditModal(false); setEditLocal(null);
+  };
+
+  const deleteGame=async(id)=>{
+    const g=games.find(x=>x.id===id);
+    if (g){
+      const oc=getOutcome(g);
+      if (oc.type==="decided"){
+        await applyTeamDeltas([
+          {team:oc.winner,winDelta:-1,loseDelta:0},
+          {team:oc.loser, winDelta:0, loseDelta:-1},
+        ]);
+      }
+    }
+    setGames(prev=>prev.filter(x=>x.id!==id));
+    if(SB){ try{ await sbDeleteGame(id);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
+  };
+
+  const rosterFor=(letter)=>letter && teams[letter]?teams[letter]:[];
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
@@ -260,7 +344,6 @@ function League({ onLogout }){
               className="text-sm h-10 px-4 rounded-xl border hover:bg-slate-50 inline-flex items-center"
               href={`${location.origin}${location.pathname}?public=1`}
               target="_blank" rel="noreferrer"
-              title="Open read-only public board"
             >
               Open Public Link
             </a>
@@ -321,10 +404,11 @@ function League({ onLogout }){
           </ol>
         </div>
 
-        {/* schedule with scores + WINNER */}
+        {/* schedule (create without scores; edit to set scores) */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
           <h3 className="text-lg sm:text-xl font-semibold mb-3">Game Schedule</h3>
 
+          {/* CREATE MATCH (no score inputs here) */}
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
             <input className="border rounded-lg px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${(games?.length||0)+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} />
             <select className="border rounded-lg px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)}>
@@ -336,18 +420,16 @@ function League({ onLogout }){
             <input className="border rounded-lg px-3 py-2 h-11" type="date" value={gDate} onChange={e=>setGDate(e.target.value)} />
             <input className="border rounded-lg px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} />
             <input className="border rounded-lg px-3 py-2 h-11 md:col-span-2" placeholder="Location / Court" value={gLoc} onChange={e=>setGLoc(e.target.value)} />
-            <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score A" value={gScoreA} onChange={e=>setGScoreA(e.target.value)} />
-            <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score B" value={gScoreB} onChange={e=>setGScoreB(e.target.value)} />
-            <button className="h-11 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Add Game</button>
+            <button className="h-11 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Create Match</button>
           </form>
 
           <div className="space-y-3">
             {games.length===0 ? (
-              <div className="text-gray-500 text-sm">No games yet. Add one above.</div>
+              <div className="text-gray-500 text-sm">No games yet. Create one above.</div>
             ) : games.map((g,idx)=>{
               const a=g.team_a?.trim(), b=g.team_b?.trim();
               const rosterA=rosterFor(a), rosterB=rosterFor(b);
-              const winner = computeWinner(g);
+              const wLabel = winnerLabel(g);
               return (
                 <div key={g.id} className="border rounded-2xl p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
@@ -358,8 +440,9 @@ function League({ onLogout }){
                       {g.location ? <span className="ml-3">• {g.location}</span> : null}
                     </div>
                     <div className="hidden sm:flex items-center gap-2">
-                      <span className={`px-2 py-1 rounded text-xs ${winner.key? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
-                        Winner: {winner.label}
+                      <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
+                      <span className={`px-2 py-1 rounded text-xs ${wLabel.startsWith("Team")? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
+                        Winner: {wLabel}
                       </span>
                       <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
                       <button className="h-9 px-3 rounded-lg bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
@@ -367,30 +450,20 @@ function League({ onLogout }){
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {/* Show roster box only if that team has players */}
                     {rosterA.length>0 && (
                       <div className="rounded-lg border p-3">
                         <div className="flex items-center justify-between mb-2">
                           <div className="font-medium">Team {a || "?"} Roster</div>
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_a||0}</span>
-                            <button className="h-8 px-2 rounded bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
-                            <button className="h-8 px-2 rounded bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
-                          </div>
+                          <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_a||0}</span>
                         </div>
                         <ul className="text-sm list-disc list-inside space-y-1">{rosterA.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
                       </div>
                     )}
-
                     {rosterB.length>0 && (
                       <div className="rounded-lg border p-3">
                         <div className="flex items-center justify-between mb-2">
                           <div className="font-medium">Team {b || "?"} Roster</div>
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_b||0}</span>
-                            <button className="h-8 px-2 rounded bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
-                            <button className="h-8 px-2 rounded bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
-                          </div>
+                          <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_b||0}</span>
                         </div>
                         <ul className="text-sm list-disc list-inside space-y-1">{rosterB.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
                       </div>
@@ -398,8 +471,9 @@ function League({ onLogout }){
                   </div>
 
                   <div className="mt-3 sm:hidden flex items-center gap-2">
-                    <span className={`px-2 py-1 rounded text-xs ${winner.key? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
-                      Winner: {winner.label}
+                    <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
+                    <span className={`px-2 py-1 rounded text-xs ${wLabel.startsWith("Team")? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
+                      Winner: {wLabel}
                     </span>
                     <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
                     <button className="h-9 px-3 rounded-lg bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
@@ -410,7 +484,7 @@ function League({ onLogout }){
           </div>
         </div>
 
-        {/* teams */}
+        {/* teams (admin) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {TEAMS.map(team=>{
             const w=scores[team]?.win??0, l=scores[team]?.lose??0;
@@ -518,28 +592,28 @@ function League({ onLogout }){
         </div>
       )}
 
-      {/* Game edit (incl. scores) */}
-      {showGameEditModal && editGame && (
+      {/* Game edit (scores editable here; auto W/L on save) */}
+      {showGameEditModal && editLocal && (
         <div className="fixed inset-0 z-50 grid place-items-center">
-          <div className="absolute inset-0 bg-black/40" onClick={()=>{setShowGameEditModal(false); setEditGame(null);}} />
+          <div className="absolute inset-0 bg-black/40" onClick={()=>{setShowGameEditModal(false); setEditLocal(null);}} />
           <div className="relative bg-white rounded-2xl shadow-xl p-6 w-[92%] max-w-lg">
-            <h4 className="text-lg font-semibold mb-3">Edit Game</h4>
+            <h4 className="text-lg font-semibold mb-3">Edit Game (Set Scores Here)</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Title" value={editGame.title||""} onChange={e=>setEditGame({...editGame,title:e.target.value})}/>
-              <input className="border rounded-lg px-3 py-2 h-11" type="date" value={editGame.gdate||""} onChange={e=>setEditGame({...editGame,gdate:e.target.value})}/>
-              <input className="border rounded-lg px-3 py-2 h-11" type="time" value={editGame.gtime||""} onChange={e=>setEditGame({...editGame,gtime:e.target.value})}/>
-              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Location" value={editGame.location||""} onChange={e=>setEditGame({...editGame,location:e.target.value})}/>
-              <select className="border rounded-lg px-3 py-2 h-11" value={editGame.team_a||""} onChange={e=>setEditGame({...editGame,team_a:e.target.value})}>
+              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Title" value={editLocal.title||""} onChange={e=>setEditLocal({...editLocal,title:e.target.value})}/>
+              <input className="border rounded-lg px-3 py-2 h-11" type="date" value={editLocal.gdate||""} onChange={e=>setEditLocal({...editLocal,gdate:e.target.value})}/>
+              <input className="border rounded-lg px-3 py-2 h-11" type="time" value={editLocal.gtime||""} onChange={e=>setEditLocal({...editLocal,gtime:e.target.value})}/>
+              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Location" value={editLocal.location||""} onChange={e=>setEditLocal({...editLocal,location:e.target.value})}/>
+              <select className="border rounded-lg px-3 py-2 h-11" value={editLocal.team_a||""} onChange={e=>setEditLocal({...editLocal,team_a:e.target.value})}>
                 <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
               </select>
-              <select className="border rounded-lg px-3 py-2 h-11" value={editGame.team_b||""} onChange={e=>setEditGame({...editGame,team_b:e.target.value})}>
+              <select className="border rounded-lg px-3 py-2 h-11" value={editLocal.team_b||""} onChange={e=>setEditLocal({...editLocal,team_b:e.target.value})}>
                 <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
               </select>
-              <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score A" value={editGame.score_a??0} onChange={e=>setEditGame({...editGame,score_a:e.target.value})}/>
-              <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score B" value={editGame.score_b??0} onChange={e=>setEditGame({...editGame,score_b:e.target.value})}/>
+              <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score A" value={editLocal.score_a??0} onChange={e=>setEditLocal({...editLocal,score_a:e.target.value})}/>
+              <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" placeholder="Score B" value={editLocal.score_b??0} onChange={e=>setEditLocal({...editLocal,score_b:e.target.value})}/>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={()=>{setShowGameEditModal(false); setEditGame(null);}} className="h-10 px-4 rounded-lg border">Cancel</button>
+              <button onClick={()=>{setShowGameEditModal(false); setEditLocal(null);}} className="h-10 px-4 rounded-lg border">Cancel</button>
               <button onClick={saveGameEdit} className="h-10 px-4 rounded-lg bg-blue-600 text-white">Save</button>
             </div>
           </div>
@@ -578,9 +652,6 @@ function PublicBoard(){
     return ()=>{ try{SB.removeChannel(ch);}catch{} };
   },[applyRemote]);
 
-  const rosterFor=(letter)=>letter && teams[letter]?teams[letter]:[];
-
-  // Filter helpers for public rendering
   const nonEmptyTeams = TEAMS.filter(t => (teams[t] || []).length > 0);
 
   return (
@@ -608,12 +679,9 @@ function PublicBoard(){
               {games.map((g,idx)=>{
                 const a=g.team_a?.trim(), b=g.team_b?.trim();
                 const rosterA=a?(teams[a]||[]):[], rosterB=b?(teams[b]||[]):[];
-                const winner = computeWinner(g);
-
-                // Hide roster panels when empty (per requirement)
+                const wLabel = winnerLabel(g);
                 const showA = rosterA.length > 0;
                 const showB = rosterB.length > 0;
-
                 return (
                   <div key={g.id||idx} className="border rounded-2xl p-4">
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
@@ -624,25 +692,25 @@ function PublicBoard(){
                         {g.location ? <span className="ml-3">• {g.location}</span> : null}
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className={`px-2 py-1 rounded text-xs ${winner.key? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
-                          Winner: {winner.label}
-                        </span>
                         <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
+                        <span className={`px-2 py-1 rounded text-xs ${wLabel.startsWith("Team")? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
+                          Winner: {wLabel}
+                        </span>
                       </div>
                     </div>
 
-                    {(showA || showB) && (
+                    { (showA || showB) && (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {showA && (
                           <div className="rounded-lg border p-3">
                             <div className="font-medium mb-2">Team {a || "?"} Roster</div>
-                            <ul className="text-sm list-disc list-inside space-y-1">{rosterA.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                            <ul className="text-sm list-disc list-inside space-y-1">{(teams[a]||[]).map((n,i)=><li key={n+i}>{n}</li>)}</ul>
                           </div>
                         )}
                         {showB && (
                           <div className="rounded-lg border p-3">
                             <div className="font-medium mb-2">Team {b || "?"} Roster</div>
-                            <ul className="text-sm list-disc list-inside space-y-1">{rosterB.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                            <ul className="text-sm list-disc list-inside space-y-1">{(teams[b]||[]).map((n,i)=><li key={n+i}>{n}</li>)}</ul>
                           </div>
                         )}
                       </div>
@@ -654,7 +722,7 @@ function PublicBoard(){
           )}
         </div>
 
-        {/* TEAMS: only publish teams with at least one player */}
+        {/* Only teams with rosters */}
         {nonEmptyTeams.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             {nonEmptyTeams.map(team=>{
@@ -688,7 +756,6 @@ function PublicBoard(){
 
 /* ------------------------------- app switch ------------------------------- */
 export default function App(){
-  const isPublic = typeof window!=="undefined" && new URLSearchParams(window.location.search).get("public")==="1";
   if (isPublic) return <PublicBoard />;      // share: https://YOUR-APP.vercel.app/?public=1
   const { user, login, logout } = useAuthUser();
   return user ? <League onLogout={logout}/> : <Login onLogin={login}/>;
