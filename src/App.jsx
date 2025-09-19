@@ -108,7 +108,7 @@ function NameWithCaptain({ name, className = "" }) {
 
 /* ───────────────────────────── credentials ───────────────────────────── */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
-let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
+let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "Dog13";
 
 /* ─────────────────────────── Supabase helpers ─────────────────────────── */
 async function sbFetchAll(){
@@ -532,7 +532,7 @@ function League({ onLogout }){
         <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold">
-              Perpetual Alumni Mini League
+              Perpetual Alumni
               <span className="ml-3 align-middle text-sm font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
                 {individuals.length} {individuals.length===1?"Player":"Players"}
               </span>
@@ -566,7 +566,7 @@ function League({ onLogout }){
 
         {/* players */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players (First-Come, First-Served)</h3>
+          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
           <ol className="space-y-2 list-decimal list-inside">
             {individuals.map((stored, idx)=>{
               const assigned=Object.keys(teams).find(t=>teams[t].includes(stored))||"";
@@ -892,7 +892,7 @@ function PublicBoard(){
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl sm:text-3xl font-bold">
-            League Summary (Public)
+            League Summary
             <span className="ml-3 text-sm font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
               {players.length} {players.length===1?"Player":"Players"}
             </span>
@@ -983,7 +983,7 @@ function PublicBoard(){
           </div>
         )}
 
-        <div className="mt-6 text-center text-sm text-gray-500">Read-only public view • refreshes automatically</div>
+        <div className="mt-6 text-center text-sm text-gray-500">Read-only public view • Created By IGM • V1.69</div>
       </div>
     </div>
   );
