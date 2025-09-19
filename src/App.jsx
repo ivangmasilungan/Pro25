@@ -16,10 +16,13 @@ function useAuthUser(){
 
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-const LS_KEY="paml:v12-autowinloss";
+const LS_KEY="paml:v13-normteam";
 const loadLocal=()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}}
 const saveLocal=(s)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(s));}catch{}}
 const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
+
+/* normalize blank team values to null so DB checks pass */
+function normTeam(v){ const x=(v??"").trim(); return x?x:null; }
 
 /* outcome helpers */
 function getOutcome(game){
@@ -40,7 +43,7 @@ function winnerLabel(g){
 
 /* ------------------------------ credentials ------------------------------ */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
-let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "Dir2";
+let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
 
 /* -------------------------- Supabase data helpers ------------------------ */
 async function sbFetchAll(){
@@ -56,17 +59,27 @@ async function sbFetchAll(){
   if (ep||es||eg) throw (ep||es||eg);
   return {players:players||[], scores:scores||[], games:games||[]};
 }
-async function sbUpsertPlayer(row){ const {error}=await SB.from("players").upsert(row); if(error) throw error; }
+async function sbUpsertPlayer(row){ // row.team may be "" from UI; normalize.
+  const payload = { ...row, team: normTeam(row.team) };
+  const {error}=await SB.from("players").upsert(payload);
+  if(error) throw error;
+}
 async function sbDeletePlayer(name){ const {error}=await SB.from("players").delete().eq("full_name",name); if(error) throw error; }
 async function sbDeleteAllPlayers(){ const {error}=await SB.from("players").delete().neq("full_name",""); if(error) throw error; }
 async function sbUpsertScore(team,wins,losses){ const {error}=await SB.from("team_scores").upsert({team,wins,losses},{onConflict:"team"}); if(error) throw error; }
-async function sbInsertGame(row){ const {data,error}=await SB.from("games").insert(row).select().single(); if(error) throw error; return data; }
-async function sbUpdateGame(id,row){ const {error}=await SB.from("games").update(row).eq("id",id); if(error) throw error; }
+async function sbInsertGame(row){
+  const payload = { ...row, team_a: normTeam(row.team_a), team_b: normTeam(row.team_b) };
+  const {data,error}=await SB.from("games").insert(payload).select().single(); if(error) throw error; return data;
+}
+async function sbUpdateGame(id,row){
+  const payload = { ...row, team_a: normTeam(row.team_a), team_b: normTeam(row.team_b) };
+  const {error}=await SB.from("games").update(payload).eq("id",id); if(error) throw error;
+}
 async function sbDeleteGame(id){ const {error}=await SB.from("games").delete().eq("id",id); if(error) throw error; }
 async function sbBulkUpsert(local){
   const playerRows=(local.individuals||[]).map(n=>({
     full_name:n,
-    team:Object.keys(local.teams||{}).find(t=>(local.teams[t]||[]).includes(n))||null,
+    team:normTeam(Object.keys(local.teams||{}).find(t=>(local.teams[t]||[]).includes(n))||null),
     paid:!!(local.paid && local.paid[n]),
     payment_method:(local.paid && local.paid[n]) || null
   }));
@@ -184,7 +197,8 @@ function League({ onLogout }){
     if(SB){ try{ await sbUpsertPlayer({full_name:v,team:null,paid:false,payment_method:null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setFlashName(v); setTimeout(()=>{itemRefs.current[v]?.scrollIntoView?.({behavior:"smooth",block:"center"});},50); setTimeout(()=>setFlashName(null),1500);
   };
-  const assign = async(name,team)=>{ setTeams(prev=>{const c=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) c[team]=[...(c[team]||[]),name]; return c;});
+  const assign = async(name,team)=>{ // UI passes "" for No Team; we send NULL via sbUpsertPlayer
+    setTeams(prev=>{const c=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) c[team]=[...(c[team]||[]),name]; return c;});
     if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name],payment_method:paid[name]||null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } };
   const beginEdit =(n)=>{ setEditingName(n); setEditingValue(n); };
   const cancelEdit=()=>{ setEditingName(null); setEditingValue(""); };
@@ -193,9 +207,9 @@ function League({ onLogout }){
     setTeams(prev=>{const c={}; for(const t in prev) c[t]=(prev[t]||[]).map(m=>m===oldN?newN:m); return c;});
     setPaid(prev=>{const np={...prev}; if(np[oldN]) np[newN]=np[oldN]; delete np[oldN]; return np;});
     if(SB){ try{
-      const team=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldN))||null;
+      const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldN))||"";
       const method=paid[oldN]||null;
-      await sbUpsertPlayer({full_name:newN,team,paid:!!method,payment_method:method});
+      await sbUpsertPlayer({full_name:newN,team:teamRaw,paid:!!method,payment_method:method}); // sbUpsertPlayer normalizes team
       await sbDeletePlayer(oldN);
     }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     cancelEdit();
@@ -206,7 +220,7 @@ function League({ onLogout }){
   /* ---------- payments ---------- */
   const openPayment=(n)=>{ setPayFor(n); setShowPayModal(true); };
   const setPayment=async(method)=>{ const name=payFor; if(!name) return; setPaid(prev=>{const np={...prev}; if(method) np[name]=method; else delete np[name]; return np;});
-    if(SB){ try{ const team=Object.keys(teams).find(t=>(teams[t]||[]).includes(name))||null; await sbUpsertPlayer({full_name:name,team,paid:!!method,payment_method:method}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
+    if(SB){ try{ const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(name))||""; await sbUpsertPlayer({full_name:name,team:teamRaw,paid:!!method,payment_method:method}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowPayModal(false); setPayFor(null);
   };
 
@@ -229,12 +243,14 @@ function League({ onLogout }){
   const defaultTitle=()=>`Game ${(games?.length||0)+1}`;
   const addGame=async(e)=>{ e.preventDefault();
     const row={
-      title:(gTitle||"").trim()||defaultTitle(), team_a:gTeamA||null, team_b:gTeamB||null,
+      title:(gTitle||"").trim()||defaultTitle(),
+      team_a:gTeamA,     // may be ""; insert helper will normalize
+      team_b:gTeamB,     // may be ""; insert helper will normalize
       gdate:gDate||null, gtime:gTime||null, location:gLoc||null,
       score_a:0, score_b:0
     };
     if(SB){ try{
-      const ins=await sbInsertGame(row);
+      const ins=await sbInsertGame(row); // normalizes team_a/team_b
       setGames(prev=>[...prev,{ id:ins.id, title:ins.title, team_a:ins.team_a||"", team_b:ins.team_b||"", gdate:ins.gdate||"", gtime:ins.gtime||"", location:ins.location||"", score_a:ins.score_a||0, score_b:ins.score_b||0 }]);
     }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
     else setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]);
@@ -291,7 +307,8 @@ function League({ onLogout }){
     const oldGame=games.find(x=>x.id===id)||{};
     const row={
       title:(g.title||"").trim()||"Game",
-      team_a:g.team_a||null, team_b:g.team_b||null,
+      team_a:g.team_a,  // may be ""; update helper will normalize
+      team_b:g.team_b,  // may be ""; update helper will normalize
       gdate:g.gdate||null, gtime:g.gtime||null, location:g.location||null,
       score_a:Number(g.score_a)||0, score_b:Number(g.score_b)||0
     };
