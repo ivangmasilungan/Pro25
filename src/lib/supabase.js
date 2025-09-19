@@ -8,6 +8,7 @@ export const supabase = url && key ? createClient(url, key) : null;
 
 if (typeof window !== "undefined") {
   window.sb = supabase || undefined;
-  window.__SB_DEBUG__ = { url, keyPresent: !!key, keyLen: key ? key.length : 0 };
-  console.log(`[sb] client ${supabase ? "created" : "NOT created"}`, window.__SB_DEBUG__);
+  console.log(
+    `[sb] client ${supabase ? "created" : "NOT created"} | url set: ${!!url} | key set: ${!!key}`
+  );
 }

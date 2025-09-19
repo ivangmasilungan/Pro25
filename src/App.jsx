@@ -2,10 +2,11 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { supabase as SB } from "./lib/supabase";
 
-/* ------------------------------- utilities ------------------------------- */
+/* ─────────────────────────── utilities & constants ─────────────────────────── */
 function setCookie(n,v,d=365){document.cookie=`${n}=${encodeURIComponent(v)}; Expires=${new Date(Date.now()+d*864e5).toUTCString()}; Path=/; SameSite=Lax`;}
 function getCookie(n){const m=document.cookie.match(new RegExp("(^| )"+n+"=([^;]+)"));return m?decodeURIComponent(m[2]):null}
 function delCookie(n){document.cookie=`${n}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`}
+
 function useAuthUser(){
   const [user,setUser]=useState(()=>getCookie("auth_user")||localStorage.getItem("auth_user")||null);
   const login  =(name)=>{localStorage.setItem("auth_user",name); setCookie("auth_user",name); setUser(name);};
@@ -16,15 +17,13 @@ function useAuthUser(){
 
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-const LS_KEY="paml:v13-normteam";
+const LS_KEY="paml:v17-positionC-visible-captain-token";
 const loadLocal=()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}}
 const saveLocal=(s)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(s));}catch{}}
 const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
-
-/* normalize blank team values to null so DB checks pass */
 function normTeam(v){ const x=(v??"").trim(); return x?x:null; }
 
-/* outcome helpers */
+/* ───────────────────────── Outcome helpers ───────────────────────── */
 function getOutcome(game){
   const ta=game?.team_a||""; const tb=game?.team_b||"";
   const a = Number(game?.score_a ?? 0);
@@ -41,11 +40,77 @@ function winnerLabel(g){
   return "TBD";
 }
 
-/* ------------------------------ credentials ------------------------------ */
+/* ─────────────── Name parsing / composing / rendering ───────────────
+   IMPORTANT CHANGE:
+   - Captain marker is **CAPTAIN** (or CAP) in storage.
+   - Position "C" is treated as a normal position (shows as "C").
+   - This fixes the bug where picking position C did not appear.
+*/
+const POS_RE = /^(PG|SG|SF|PF|C)$/i;
+const CAP_RE = /^(CAPTAIN|CAP)$/i;
+
+function parseStoredName(raw){
+  const s=String(raw||"");
+  const m=s.match(/^(.*?)(\s*\((.*)\))\s*$/);
+  const baseWithJersey = (m? m[1] : s).trim(); // e.g., "Marvin C #20"
+  const insideRaw = m? (m[3]||"") : "";        // e.g., "PG, CAPTAIN"
+
+  const tokens = insideRaw.split(",").map(t=>t.trim()).filter(Boolean);
+
+  let isCaptain = false;
+  const otherTags = [];
+  const seen = new Set();
+
+  for (const t of tokens) {
+    if (CAP_RE.test(t)) { isCaptain = true; continue; }        // 'CAPTAIN' or 'CAP'
+    if (POS_RE.test(t)) {                                      // positions (including 'C')
+      const up = t.toUpperCase();
+      if (!seen.has(up)) { seen.add(up); otherTags.push(up); }
+      continue;
+    }
+    // keep any extra custom tags (dedup)
+    const key=t.toUpperCase();
+    if (!seen.has(key)) { seen.add(key); otherTags.push(t); }
+  }
+  return { baseWithJersey, isCaptain, otherTags };
+}
+
+function composeStoredName(baseWithJersey, isCaptain, otherTags){
+  const tags = [];
+  // normalize / dedupe positions in uppercase
+  const seen=new Set();
+  (otherTags||[]).forEach(t=>{
+    const up=String(t||"").toUpperCase().trim();
+    if (!up) return;
+    if (!seen.has(up)) { seen.add(up); tags.push(up); }
+  });
+  if (isCaptain) tags.push("CAPTAIN"); // << store CAPTAIN (not C)
+  const paren = tags.length ? ` (${tags.join(", ")})` : "";
+  return `${baseWithJersey}${paren}`;
+}
+
+/* Visible renderer: prints tags except captain separately,
+   and appends red "Captain" if captain=true. */
+function NameWithCaptain({ name, className = "" }) {
+  const { baseWithJersey, isCaptain, otherTags } = parseStoredName(name);
+  const inside = [];
+  otherTags.forEach((p, i) => {
+    inside.push(<span key={`tag-${i}`}>{p}</span>);
+    if (i < otherTags.length - 1 || isCaptain) inside.push(", ");
+  });
+  if (isCaptain) inside.push(<span key="cap" className="text-red-700 font-semibold">Captain</span>);
+  return (
+    <span className={className}>
+      {baseWithJersey}{inside.length ? <> ({inside})</> : null}
+    </span>
+  );
+}
+
+/* ───────────────────────────── credentials ───────────────────────────── */
 let storedUsername=import.meta.env?.VITE_APP_USERNAME || "Admin";
 let storedPassword=import.meta.env?.VITE_APP_PASSWORD || "2025!";
 
-/* -------------------------- Supabase data helpers ------------------------ */
+/* ─────────────────────────── Supabase helpers ─────────────────────────── */
 async function sbFetchAll(){
   const [
     {data:players, error:ep},
@@ -54,12 +119,12 @@ async function sbFetchAll(){
   ] = await Promise.all([
     SB.from("players").select("full_name,team,paid,payment_method").order("full_name",{ascending:true}),
     SB.from("team_scores").select("team,wins,losses"),
-    SB.from("games").select("id,title,team_a,team_b,gdate,gtime,location,score_a,score_b,created_at").order("created_at",{ascending:true}),
+    SB.from("games").select("id,title,team_a,team_b,gdate,gtime,location,score_a,score_b").order("title",{ascending:true}),
   ]);
   if (ep||es||eg) throw (ep||es||eg);
   return {players:players||[], scores:scores||[], games:games||[]};
 }
-async function sbUpsertPlayer(row){ // row.team may be "" from UI; normalize.
+async function sbUpsertPlayer(row){
   const payload = { ...row, team: normTeam(row.team) };
   const {error}=await SB.from("players").upsert(payload);
   if(error) throw error;
@@ -89,7 +154,7 @@ async function sbBulkUpsert(local){
   if (r1.error||r2.error) throw (r1.error||r2.error);
 }
 
-/* ------------------------------ login screen ----------------------------- */
+/* ─────────────────────────────── Login ─────────────────────────────── */
 function Login({ onLogin }){
   const [u,setU]=useState(""); 
   const [p,setP]=useState("");
@@ -114,19 +179,29 @@ function Login({ onLogin }){
   );
 }
 
-/* --------------------------- admin league (full) -------------------------- */
+/* ───────────────────────────── League (Admin) ───────────────────────────── */
 function League({ onLogout }){
   const [individuals,setIndividuals]=useState([]);
   const [teams,setTeams]=useState(emptyTeams);
   const [paid,setPaid]=useState({}); // name -> "cash" | "gcash"
   const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
+
   const [newName,setNewName]=useState("");
+  const [newJersey,setNewJersey]=useState("");
+  const [newPos,setNewPos]=useState("");
+  const [newCaptain,setNewCaptain]=useState(false);
 
   const [conn,setConn]=useState("checking"); // online | local | checking
   const [connErr,setConnErr]=useState("");
 
-  const [editingName,setEditingName]=useState(null);
-  const [editingValue,setEditingValue]=useState("");
+  // Edit dialog state
+  const [editTarget,setEditTarget]=useState(null); // old stored full
+  const [editBaseName,setEditBaseName]=useState("");
+  const [editJersey,setEditJersey]=useState("");
+  const [editPos,setEditPos]=useState("");
+  const [editCaptain,setEditCaptain]=useState(false);
+  const [showEditModal,setShowEditModal]=useState(false);
+
   const [flashName,setFlashName]=useState(null);
   const itemRefs=useRef({});
 
@@ -144,6 +219,7 @@ function League({ onLogout }){
   const [editLocal,setEditLocal]=useState(null); const [showGameEditModal,setShowGameEditModal]=useState(false);
 
   const makeLocal = (extra={}) => ({ individuals,teams,paid,scores,games, ...extra });
+
   const applyRemote = (remote)=>{
     const {players, scores:ts, games:gs}=remote||{players:[],scores:[],games:[]};
     setIndividuals(players.map(p=>p.full_name));
@@ -155,13 +231,51 @@ function League({ onLogout }){
     (ts||[]).forEach(r=>{ if(s[r.team]) s[r.team]={win:r.wins||0,lose:r.losses||0}; });
     setScores(s);
     setGames((gs||[]).map(g=>({
-      id:g.id, title:g.title||"", team_a:g.team_a||"", team_b:g.team_b||"",
-      gdate:g.gdate||"", gtime:g.gtime||"", location:g.location||"",
-      score_a:Number.isFinite(g.score_a)?g.score_a:0, score_b:Number.isFinite(g.score_b)?g.score_b:0
+      id: g.id,
+      title: g.title || "",
+      team_a: g.team_a || "",
+      team_b: g.team_b || "",
+      gdate: g.gdate || "",
+      gtime: g.gtime || "",
+      location: g.location || "",
+      score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
+      score_b: Number.isFinite(g.score_b) ? g.score_b : 0
     })));
-    saveLocal({ individuals:players.map(p=>p.full_name), teams:t, paid:players.reduce((a,p)=>{ a[p.full_name]=p.payment_method || (p.paid ? "cash" : undefined); return a; },{}), scores:s, games:(gs||[]).map(g=>({id:g.id,title:g.title||"",team_a:g.team_a||"",team_b:g.team_b||"",gdate:g.gdate||"",gtime:g.gtime||"",location:g.location||"",score_a:Number.isFinite(g.score_a)?g.score_a:0,score_b:Number.isFinite(g.score_b)?g.score_b:0})) });
+    saveLocal({
+      individuals: players.map(p=>p.full_name),
+      teams: t,
+      paid: players.reduce((a,p)=>{ a[p.full_name]=p.payment_method || (p.paid ? "cash" : undefined); return a; },{}),
+      scores: s,
+      games: (gs||[]).map(g=>({
+        id: g.id,
+        title: g.title || "",
+        team_a: g.team_a || "",
+        team_b: g.team_b || "",
+        gdate: g.gdate || "",
+        gtime: g.gtime || "",
+        location: g.location || "",
+        score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
+        score_b: Number.isFinite(g.score_b) ? g.score_b : 0
+      }))
+    });
   };
-  const applyLocal=(snap)=>{ setIndividuals(snap.individuals||[]); setTeams(snap.teams||emptyTeams); setPaid(snap.paid||{}); setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{})); setGames((snap.games||[]).map(g=>({id:g.id,title:g.title||"",team_a:g.team_a||"",team_b:g.team_b||"",gdate:g.gdate||"",gtime:g.gtime||"",location:g.location||"",score_a:Number.isFinite(g.score_a)?g.score_a:0,score_b:Number.isFinite(g.score_b)?g.score_b:0}))); };
+  const applyLocal=(snap)=>{ 
+    setIndividuals(snap.individuals||[]); 
+    setTeams(snap.teams||emptyTeams); 
+    setPaid(snap.paid||{}); 
+    setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{})); 
+    setGames((snap.games||[]).map(g=>({
+      id: g.id,
+      title: g.title || "",
+      team_a: g.team_a || "",
+      team_b: g.team_b || "",
+      gdate: g.gdate || "",
+      gtime: g.gtime || "",
+      location: g.location || "",
+      score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
+      score_b: Number.isFinite(g.score_b) ? g.score_b : 0
+    })));
+  };
 
   useEffect(()=>{ (async()=>{
     const localSnap=loadLocal();
@@ -192,39 +306,106 @@ function League({ onLogout }){
 
   useEffect(()=>{ saveLocal(makeLocal()); },[individuals,teams,paid,scores,games]);
 
-  const add = async(e)=>{ e.preventDefault(); const v=newName.trim(); if(!v) return;
-    setNewName(""); setIndividuals(prev=>[v,...prev]);
-    if(SB){ try{ await sbUpsertPlayer({full_name:v,team:null,paid:false,payment_method:null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
-    setFlashName(v); setTimeout(()=>{itemRefs.current[v]?.scrollIntoView?.({behavior:"smooth",block:"center"});},50); setTimeout(()=>setFlashName(null),1500);
-  };
-  const assign = async(name,team)=>{ // UI passes "" for No Team; we send NULL via sbUpsertPlayer
-    setTeams(prev=>{const c=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) c[team]=[...(c[team]||[]),name]; return c;});
-    if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name],payment_method:paid[name]||null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } };
-  const beginEdit =(n)=>{ setEditingName(n); setEditingValue(n); };
-  const cancelEdit=()=>{ setEditingName(null); setEditingValue(""); };
-  const saveEdit =async()=>{ const oldN=editingName, newN=(editingValue||"").trim(); if(!oldN||!newN||oldN===newN){cancelEdit();return;}
-    setIndividuals(prev=>prev.map(n=>n===oldN?newN:n));
-    setTeams(prev=>{const c={}; for(const t in prev) c[t]=(prev[t]||[]).map(m=>m===oldN?newN:m); return c;});
-    setPaid(prev=>{const np={...prev}; if(np[oldN]) np[newN]=np[oldN]; delete np[oldN]; return np;});
-    if(SB){ try{
-      const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldN))||"";
-      const method=paid[oldN]||null;
-      await sbUpsertPlayer({full_name:newN,team:teamRaw,paid:!!method,payment_method:method}); // sbUpsertPlayer normalizes team
-      await sbDeletePlayer(oldN);
-    }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
-    cancelEdit();
-  };
-  const inc = async(team,type,delta)=>{ setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
-    if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win"?{win:Math.max(0,cur.win+delta),lose:cur.lose}:{win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){setConn("local"); setConnErr(String(e?.message||e));}};
+  /* compose for Add */
+  function composeBaseWithJersey(name, jersey){
+    const base = (name||"").trim();
+    const j = (jersey||"").trim();
+    return j ? `${base} #${j}` : base;
+  }
+  const add = async(e)=>{ 
+    e.preventDefault();
+    const base = (newName||"").trim();
+    if(!base) return;
+    const baseWithJersey = composeBaseWithJersey(base, newJersey||"");
+    const tags = [];
+    if (newPos.trim()) tags.push(newPos.trim().toUpperCase()); // may be "C" position
+    const stored = composeStoredName(baseWithJersey, newCaptain, tags);
 
-  /* ---------- payments ---------- */
+    setIndividuals(prev=>prev.concat(stored));
+    setNewName(""); setNewJersey(""); setNewPos(""); setNewCaptain(false);
+
+    if(SB){ 
+      try{ await sbUpsertPlayer({full_name: stored, team: null, paid: false, payment_method: null}); }
+      catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
+    }
+    setFlashName(stored);
+    setTimeout(()=>{itemRefs.current[stored]?.scrollIntoView?.({behavior:"smooth",block:"center"});},50);
+    setTimeout(()=>setFlashName(null),1500);
+  };
+
+  /* assign team */
+  const assign = async(name,team)=>{ 
+    setTeams(prev=>{const c=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) c[team]=[...(c[team]||[]),name]; return c;});
+    if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name],payment_method:paid[name]||null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } 
+  };
+
+  /* open Edit dialog (structured) */
+  const openEdit = (storedName) => {
+    setEditTarget(storedName);
+    const { baseWithJersey, isCaptain, otherTags } = parseStoredName(storedName);
+
+    // split baseWithJersey into "Name" + optional " #NN"
+    const m = baseWithJersey.match(/^(.*?)(?:\s*#(\d+))?$/);
+    setEditBaseName((m?.[1]||"").trim());
+    setEditJersey((m?.[2]||"").trim());
+
+    // pick a position tag from otherTags if present (PG/SG/SF/PF/C)
+    const pos = (otherTags.find(t=>POS_RE.test(t))||"").toUpperCase();
+    setEditPos(pos);
+    setEditCaptain(!!isCaptain);
+
+    setShowEditModal(true);
+  };
+
+  const saveEdit = async () => {
+    const oldStored = editTarget;
+    if (!oldStored) { setShowEditModal(false); return; }
+
+    const baseWithJersey = composeBaseWithJersey(editBaseName||"", editJersey||"");
+    const otherTags = [];
+    if (editPos) otherTags.push(editPos); // includes "C" position properly
+    const newStored = composeStoredName(baseWithJersey, editCaptain, otherTags);
+
+    // update local
+    setIndividuals(prev=>prev.map(n=>n===oldStored?newStored:n));
+    setTeams(prev=>{
+      const c={};
+      for(const t in prev) c[t]=(prev[t]||[]).map(m=>m===oldStored?newStored:m);
+      return c;
+    });
+    setPaid(prev=>{
+      const np={...prev};
+      if(np[oldStored]) np[newStored]=np[oldStored];
+      delete np[oldStored];
+      return np;
+    });
+
+    // sync remote
+    if(SB){ try{
+      const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldStored))||"";
+      const method=paid[oldStored]||null;
+      await sbUpsertPlayer({full_name:newStored,team:teamRaw,paid:!!method,payment_method:method});
+      await sbDeletePlayer(oldStored);
+    }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
+
+    setShowEditModal(false);
+    setEditTarget(null);
+  };
+
+  /* scores buttons */
+  const inc = async(team,type,delta)=>{ 
+    setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
+    if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win"?{win:Math.max(0,cur.win+delta),lose:cur.lose}:{win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){setConn("local"); setConnErr(String(e?.message||e));}
+  };
+
+  /* payments */
   const openPayment=(n)=>{ setPayFor(n); setShowPayModal(true); };
   const setPayment=async(method)=>{ const name=payFor; if(!name) return; setPaid(prev=>{const np={...prev}; if(method) np[name]=method; else delete np[name]; return np;});
     if(SB){ try{ const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(name))||""; await sbUpsertPlayer({full_name:name,team:teamRaw,paid:!!method,payment_method:method}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowPayModal(false); setPayFor(null);
   };
 
-  /* ---------- delete / clear / logout prompts ---------- */
+  /* delete / clear / logout */
   const requestDelete=(n)=>{ setDeleteTarget(n); setShowDeleteModal(true); };
   const doDelete=async()=>{ const n=deleteTarget; if(!n){setShowDeleteModal(false);return;}
     setIndividuals(prev=>prev.filter(x=>x!==n));
@@ -238,26 +419,27 @@ function League({ onLogout }){
   };
   const doLogout=()=>{ setShowLogoutModal(false); onLogout(); };
 
-  /* ---------- game creation (no scores on create) ---------- */
+  /* games (create w/o scores; edit scores later) */
   const resetGameForm=()=>{ setGTitle(""); setGDate(""); setGTime(""); setGLoc(""); setGTeamA(""); setGTeamB(""); };
-  const defaultTitle=()=>`Game ${(games?.length||0)+1}`;
   const addGame=async(e)=>{ e.preventDefault();
     const row={
-      title:(gTitle||"").trim()||defaultTitle(),
-      team_a:gTeamA,     // may be ""; insert helper will normalize
-      team_b:gTeamB,     // may be ""; insert helper will normalize
-      gdate:gDate||null, gtime:gTime||null, location:gLoc||null,
-      score_a:0, score_b:0
+      title:(gTitle||"").trim()||`Game ${(games?.length||0)+1}`,
+      team_a: gTeamA,
+      team_b: gTeamB,
+      gdate: gDate || null,
+      gtime: gTime || null,
+      location: gLoc || null,
+      score_a: 0,
+      score_b: 0
     };
     if(SB){ try{
-      const ins=await sbInsertGame(row); // normalizes team_a/team_b
-      setGames(prev=>[...prev,{ id:ins.id, title:ins.title, team_a:ins.team_a||"", team_b:ins.team_b||"", gdate:ins.gdate||"", gtime:ins.gtime||"", location:ins.location||"", score_a:ins.score_a||0, score_b:ins.score_b||0 }]);
+      const ins=await sbInsertGame(row);
+      setGames(prev=>[...prev,{ id: ins.id, ...row }]);
     }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
     else setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]);
     resetGameForm();
   };
 
-  /* ---------- auto W/L adjustment helpers ---------- */
   const applyTeamDeltas = async (deltas) => {
     if (!deltas || deltas.length===0) return;
     let snapshot={};
@@ -267,8 +449,7 @@ function League({ onLogout }){
         const cur=next[team]||{win:0,lose:0};
         next[team]={win:Math.max(0,(cur.win||0)+winDelta),lose:Math.max(0,(cur.lose||0)+loseDelta)};
       });
-      snapshot=next;
-      return next;
+      snapshot=next; return next;
     });
     if (SB){
       for (const {team} of deltas){
@@ -278,11 +459,24 @@ function League({ onLogout }){
     }
   };
 
-  const adjustRecordsFromChange = async (oldGame, newGame) => {
+  const requestEditGame=(g)=>{ setEditLocal({...g}); setShowGameEditModal(true); };
+  const saveGameEdit=async()=>{ const g=editLocal; if(!g) return; const id=g.id;
+    const oldGame=games.find(x=>x.id===id)||{};
+    const row={
+      title: (g.title||"").trim()||"Game",
+      team_a: g.team_a,
+      team_b: g.team_b,
+      gdate: g.gdate || null,
+      gtime: g.gtime || null,
+      location: g.location || null,
+      score_a: Number(g.score_a)||0,
+      score_b: Number(g.score_b)||0
+    };
+    // record adjustment (auto W/L)
+    const newGame={...oldGame,...row};
     const oldOc=getOutcome(oldGame);
     const newOc=getOutcome(newGame);
     const deltas=[];
-
     if (oldOc.type==="decided" && newOc.type==="decided"){
       if (oldOc.winner!==newOc.winner || oldOc.loser!==newOc.loser){
         deltas.push({team:oldOc.winner,winDelta:-1,loseDelta:0});
@@ -297,27 +491,12 @@ function League({ onLogout }){
       deltas.push({team:oldOc.winner,winDelta:-1,loseDelta:0});
       deltas.push({team:oldOc.loser, winDelta:0, loseDelta:-1});
     }
-
     if (deltas.length) await applyTeamDeltas(deltas);
-  };
 
-  /* ---------- edit & delete games (scores editable here) ---------- */
-  const requestEditGame=(g)=>{ setEditLocal({...g}); setShowGameEditModal(true); };
-  const saveGameEdit=async()=>{ const g=editLocal; if(!g) return; const id=g.id;
-    const oldGame=games.find(x=>x.id===id)||{};
-    const row={
-      title:(g.title||"").trim()||"Game",
-      team_a:g.team_a,  // may be ""; update helper will normalize
-      team_b:g.team_b,  // may be ""; update helper will normalize
-      gdate:g.gdate||null, gtime:g.gtime||null, location:g.location||null,
-      score_a:Number(g.score_a)||0, score_b:Number(g.score_b)||0
-    };
     setGames(prev=>prev.map(x=>x.id===id?{...x,...row}:x));
-    await adjustRecordsFromChange(oldGame,{...oldGame,...row});
     if(SB){ try{ await sbUpdateGame(id,row);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowGameEditModal(false); setEditLocal(null);
   };
-
   const deleteGame=async(id)=>{
     const g=games.find(x=>x.id===id);
     if (g){
@@ -335,6 +514,7 @@ function League({ onLogout }){
 
   const rosterFor=(letter)=>letter && teams[letter]?teams[letter]:[];
 
+  /* ───────────────────────────── UI (Admin) ───────────────────────────── */
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-6xl">
@@ -366,78 +546,76 @@ function League({ onLogout }){
             </a>
           </div>
 
-          <form onSubmit={add} className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="flex gap-3">
-              <input className="flex-1 border rounded-xl px-3 py-2 h-11" placeholder="Enter full name" value={newName} onChange={(e)=>setNewName(e.target.value)} />
-              <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white">Add</button>
+          {/* Add Player */}
+          <form onSubmit={add} className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder="Full name (e.g., Marvin)" value={newName} onChange={(e)=>setNewName(e.target.value)} />
+            <input className="border rounded-xl px-3 py-2 h-11" placeholder="Jersey #" inputMode="numeric" value={newJersey} onChange={(e)=>setNewJersey(e.target.value)} />
+            <select className="border rounded-xl px-3 py-2 h-11" value={newPos} onChange={(e)=>setNewPos(e.target.value)}>
+              <option value="">Position</option>
+              <option value="PG">PG</option><option value="SG">SG</option><option value="SF">SF</option><option value="PF">PF</option><option value="C">C</option>
+            </select>
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={newCaptain} onChange={(e)=>setNewCaptain(e.target.checked)} />
+                Captain
+              </label>
+              <button className="ml-auto h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white">Add</button>
             </div>
           </form>
         </div>
 
         {/* players */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
-          <ol className="space-y-2">
-            {individuals.map((name)=>{
-              const assigned=Object.keys(teams).find(t=>teams[t].includes(name))||"";
-              const method=paid[name]; // "cash" | "gcash"
+          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players (First-Come, First-Served)</h3>
+          <ol className="space-y-2 list-decimal list-inside">
+            {individuals.map((stored, idx)=>{
+              const assigned=Object.keys(teams).find(t=>teams[t].includes(stored))||"";
+              const method=paid[stored]; // "cash" | "gcash"
               const paidBadge = method==="gcash" ? "text-blue-700 bg-blue-100" : "text-green-700 bg-green-100";
               return (
-                <li key={name} ref={el=>{if(el) itemRefs.current[name]=el;}}
-                    className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1 "+(flashName===name?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
-                  {editingName===name ? (
-                    <div className="flex items-center gap-2 w-full">
-                      <input className="border rounded-lg px-2 py-2 flex-1" value={editingValue} onChange={(e)=>setEditingValue(e.target.value)} onKeyDown={(e)=>e.key==="Enter" && saveEdit()} autoFocus />
-                      <button type="button" onClick={saveEdit} className="h-9 px-3 rounded-lg bg-green-600 text-white">Save</button>
-                      <button type="button" onClick={cancelEdit} className="h-9 px-3 rounded-lg bg-gray-400 text-white">Cancel</button>
-                    </div>
-                  ) : (
-                    <span className="flex-1 font-medium">
-                      {name}
-                      {method && (
-                        <span className={`ml-2 inline-flex items-center gap-1 ${paidBadge} px-2 py-0.5 rounded-full text-xs`}>
-                          Paid ({method==="cash"?"Cash":"GCash"})
-                        </span>
-                      )}
-                    </span>
-                  )}
+                <li key={stored} ref={el=>{if(el) itemRefs.current[stored]=el;}}
+                    className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1 "+(flashName===stored?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
+                  <span className="flex-1 font-medium">
+                    <NameWithCaptain name={stored} />
+                    {method && (
+                      <span className={`ml-2 inline-flex items-center gap-1 ${paidBadge} px-2 py-0.5 rounded-full text-xs`}>
+                        Paid ({method==="cash"?"Cash":"GCash"})
+                      </span>
+                    )}
+                  </span>
 
-                  {editingName===name ? null : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={(e)=>assign(name,e.target.value)}>
-                        <option value="">No Team</option>
-                        {TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
-                      </select>
-                      <button type="button" onClick={()=>openPayment(name)} className={`h-9 px-3 rounded-lg text-white ${method==="gcash"?"bg-sky-700":method==="cash"?"bg-green-700":"bg-green-500"}`}>
-                        {method ? "Change Paid" : "Paid"}
-                      </button>
-                      <button type="button" onClick={()=>{setEditingName(name); setEditingValue(name);}} className="h-9 px-3 rounded-lg bg-yellow-500 text-white">Edit</button>
-                      <button type="button" onClick={()=>requestDelete(name)} className="h-9 px-3 rounded-lg bg-red-500 text-white">Delete</button>
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={(e)=>assign(stored,e.target.value)}>
+                      <option value="">No Team</option>
+                      {TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
+                    </select>
+                    <button type="button" onClick={()=>{ setPayFor(stored); setShowPayModal(true); }} className={`h-9 px-3 rounded-lg text-white ${method==="gcash"?"bg-sky-700":method==="cash"?"bg-green-700":"bg-green-500"}`}>
+                      {method ? "Change Paid" : "Paid"}
+                    </button>
+                    <button type="button" onClick={()=>openEdit(stored)} className="h-9 px-3 rounded-lg bg-yellow-500 text-white">Edit</button>
+                    <button type="button" onClick={()=>{ setDeleteTarget(stored); setShowDeleteModal(true); }} className="h-9 px-3 rounded-lg bg-red-500 text-white">Delete</button>
+                  </div>
                 </li>
               );
             })}
           </ol>
         </div>
 
-        {/* schedule (create without scores; edit to set scores) */}
+        {/* schedule */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
           <h3 className="text-lg sm:text-xl font-semibold mb-3">Game Schedule</h3>
-
-          {/* CREATE MATCH (no score inputs here) */}
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
-            <input className="border rounded-lg px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${(games?.length||0)+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} />
-            <select className="border rounded-lg px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)}>
+            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${(games?.length||0)+1})`} value={gTitle} onChange={(e)=>setGTitle(e.target.value)} />
+            <select className="border rounded-xl px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)}>
               <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
             </select>
-            <select className="border rounded-lg px-3 py-2 h-11" value={gTeamB} onChange={e=>setGTeamB(e.target.value)}>
+            <select className="border rounded-xl px-3 py-2 h-11" value={gTeamB} onChange={e=>setGTeamB(e.target.value)}>
               <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
             </select>
-            <input className="border rounded-lg px-3 py-2 h-11" type="date" value={gDate} onChange={e=>setGDate(e.target.value)} />
-            <input className="border rounded-lg px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} />
-            <input className="border rounded-lg px-3 py-2 h-11 md:col-span-2" placeholder="Location / Court" value={gLoc} onChange={e=>setGLoc(e.target.value)} />
-            <button className="h-11 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Create Match</button>
+            <input className="border rounded-xl px-3 py-2 h-11" type="date" value={gDate} onChange={e=>setGDate(e.target.value)} />
+            <input className="border rounded-xl px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} />
+            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder="Location / Court" value={gLoc} onChange={e=>setGLoc(e.target.value)} />
+            <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Create Match</button>
           </form>
 
           <div className="space-y-3">
@@ -461,7 +639,7 @@ function League({ onLogout }){
                       <span className={`px-2 py-1 rounded text-xs ${wLabel.startsWith("Team")? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
                         Winner: {wLabel}
                       </span>
-                      <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
+                      <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>{setEditLocal(g); setShowGameEditModal(true);}}>Edit</button>
                       <button className="h-9 px-3 rounded-lg bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
                     </div>
                   </div>
@@ -473,7 +651,9 @@ function League({ onLogout }){
                           <div className="font-medium">Team {a || "?"} Roster</div>
                           <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_a||0}</span>
                         </div>
-                        <ul className="text-sm list-disc list-inside space-y-1">{rosterA.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                        <ul className="text-sm list-disc list-inside space-y-1">
+                          {rosterA.map((raw,i)=>(<li key={raw+i}><NameWithCaptain name={raw} /></li>))}
+                        </ul>
                       </div>
                     )}
                     {rosterB.length>0 && (
@@ -482,7 +662,9 @@ function League({ onLogout }){
                           <div className="font-medium">Team {b || "?"} Roster</div>
                           <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold">Score: {g.score_b||0}</span>
                         </div>
-                        <ul className="text-sm list-disc list-inside space-y-1">{rosterB.map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                        <ul className="text-sm list-disc list-inside space-y-1">
+                          {rosterB.map((raw,i)=>(<li key={raw+i}><NameWithCaptain name={raw} /></li>))}
+                        </ul>
                       </div>
                     )}
                   </div>
@@ -492,7 +674,7 @@ function League({ onLogout }){
                     <span className={`px-2 py-1 rounded text-xs ${wLabel.startsWith("Team")? "bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>
                       Winner: {wLabel}
                     </span>
-                    <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>requestEditGame(g)}>Edit</button>
+                    <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>{setEditLocal(g); setShowGameEditModal(true);}}>Edit</button>
                     <button className="h-9 px-3 rounded-lg bg-red-500 text-white" onClick={()=>deleteGame(g.id)}>Delete</button>
                   </div>
                 </div>
@@ -501,7 +683,7 @@ function League({ onLogout }){
           </div>
         </div>
 
-        {/* teams (admin) */}
+        {/* teams */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {TEAMS.map(team=>{
             const w=scores[team]?.win??0, l=scores[team]?.lose??0;
@@ -518,17 +700,17 @@ function League({ onLogout }){
                   <button onClick={()=>inc(team,"lose",-1)} className="h-9 px-3 border rounded-lg">-L</button>
                 </div>
                 <ul className="space-y-2">
-                  {(teams[team]||[]).length ? (teams[team]||[]).map((m,i)=>{
-                    const method=paid[m];
+                  {(teams[team]||[]).length ? (teams[team]||[]).map((raw,i)=>{
+                    const method=paid[raw];
                     const badge = method==="gcash" ? "text-blue-700 bg-blue-100" : "text-green-700 bg-green-100";
                     return (
-                      <li key={m} className="flex items-center gap-2">
+                      <li key={raw} className="flex items-center gap-2">
                         <span className="font-medium w-6 text-right">{i+1}.</span>
                         <span className="flex-1">
-                          {m}
+                          <NameWithCaptain name={raw} />
                           {method && <span className={`ml-2 inline-flex items-center gap-1 ${badge} px-2 py-0.5 rounded-full text-xs`}>Paid ({method==="cash"?"Cash":"GCash"})</span>}
                         </span>
-                        <button onClick={()=>assign(m,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white">Remove</button>
+                        <button onClick={()=>assign(raw,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white">Remove</button>
                       </li>
                     );
                   }) : <li className="text-gray-400">No players</li>}
@@ -603,7 +785,33 @@ function League({ onLogout }){
             <p className="text-sm text-gray-600 mb-4">You will be returned to the login screen.</p>
             <div className="flex justify-end gap-2">
               <button onClick={()=>setShowLogoutModal(false)} className="h-10 px-4 rounded-lg border">Cancel</button>
-              <button onClick={doLogout} className="h-10 px-4 rounded-lg bg-rose-600 text-white">Yes, Logout</button>
+              <button onClick={()=>{setShowLogoutModal(false); onLogout();}} className="h-10 px-4 rounded-lg bg-rose-600 text-white">Yes, Logout</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Player Edit (with Captain toggle and Position selector including C) */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center">
+          <div className="absolute inset-0 bg-black/40" onClick={()=>{setShowEditModal(false); setEditTarget(null);}} />
+          <div className="relative bg-white rounded-2xl shadow-xl p-6 w-[92%] max-w-md">
+            <h4 className="text-lg font-semibold mb-3">Edit Player</h4>
+            <div className="grid grid-cols-1 gap-3">
+              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Full name" value={editBaseName} onChange={e=>setEditBaseName(e.target.value)} />
+              <input className="border rounded-lg px-3 py-2 h-11" placeholder="Jersey #" value={editJersey} onChange={e=>setEditJersey(e.target.value)} />
+              <select className="border rounded-lg px-3 py-2 h-11" value={editPos} onChange={e=>setEditPos(e.target.value)}>
+                <option value="">Position</option>
+                <option value="PG">PG</option><option value="SG">SG</option><option value="SF">SF</option><option value="PF">PF</option><option value="C">C</option>
+              </select>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={editCaptain} onChange={e=>setEditCaptain(e.target.checked)} />
+                Captain
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>{setShowEditModal(false); setEditTarget(null);}} className="h-10 px-4 rounded-lg border">Cancel</button>
+              <button onClick={saveEdit} className="h-10 px-4 rounded-lg bg-blue-600 text-white">Save</button>
             </div>
           </div>
         </div>
@@ -631,7 +839,7 @@ function League({ onLogout }){
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={()=>{setShowGameEditModal(false); setEditLocal(null);}} className="h-10 px-4 rounded-lg border">Cancel</button>
-              <button onClick={saveGameEdit} className="h-10 px-4 rounded-lg bg-blue-600 text-white">Save</button>
+              <button onClick={async()=>{await saveGameEdit();}} className="h-10 px-4 rounded-lg bg-blue-600 text-white">Save</button>
             </div>
           </div>
         </div>
@@ -640,9 +848,7 @@ function League({ onLogout }){
   );
 }
 
-/* ---------------------------- public read-only ---------------------------- */
-const isPublic = typeof window!=="undefined" && new URLSearchParams(window.location.search).get("public")==="1";
-
+/* ────────────────────────── Public (read-only) ────────────────────────── */
 function PublicBoard(){
   const [loading,setLoading]=useState(true);
   const [err,setErr]=useState("");
@@ -656,7 +862,17 @@ function PublicBoard(){
     setPlayers(p.map(x=>x.full_name));
     const t=TEAMS.reduce((a,k)=>{a[k]=[];return a;},{}); p.forEach(x=>{ if(x.team && t[x.team]) t[x.team].push(x.full_name); }); setTeams(t);
     const sc=TEAMS.reduce((a,k)=>{a[k]={win:0,lose:0};return a;},{}); (s||[]).forEach(r=>{ if(sc[r.team]) sc[r.team]={win:r.wins||0,lose:r.losses||0};}); setScores(sc);
-    setGames((g||[]).map(row=>({ id:row.id, title:row.title||"", team_a:row.team_a||"", team_b:row.team_b||"", gdate:row.gdate||"", gtime:row.gtime||"", location:row.location||"", score_a:Number.isFinite(row.score_a)?row.score_a:0, score_b:Number.isFinite(row.score_b)?row.score_b:0 })));
+    setGames((g||[]).map(row=>({
+      id: row.id,
+      title: row.title || "",
+      team_a: row.team_a || "",
+      team_b: row.team_b || "",
+      gdate: row.gdate || "",
+      gtime: row.gtime || "",
+      location: row.location || "",
+      score_a: Number.isFinite(row.score_a) ? row.score_a : 0,
+      score_b: Number.isFinite(row.score_b) ? row.score_b : 0
+    })));
   },[]);
 
   useEffect(()=>{ (async()=>{ try{ if(!window.sb) throw new Error("Supabase not initialized"); const data=await sbFetchAll(); applyRemote(data); setErr(""); }catch(e){ setErr(String(e?.message||e)); }finally{ setLoading(false); } })(); },[applyRemote]);
@@ -716,18 +932,22 @@ function PublicBoard(){
                       </div>
                     </div>
 
-                    { (showA || showB) && (
+                    {(showA || showB) && (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {showA && (
                           <div className="rounded-lg border p-3">
                             <div className="font-medium mb-2">Team {a || "?"} Roster</div>
-                            <ul className="text-sm list-disc list-inside space-y-1">{(teams[a]||[]).map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                            <ul className="text-sm list-disc list-inside space-y-1">
+                              {(teams[a]||[]).map((raw,i)=>(<li key={raw+i}><NameWithCaptain name={raw} /></li>))}
+                            </ul>
                           </div>
                         )}
                         {showB && (
                           <div className="rounded-lg border p-3">
                             <div className="font-medium mb-2">Team {b || "?"} Roster</div>
-                            <ul className="text-sm list-disc list-inside space-y-1">{(teams[b]||[]).map((n,i)=><li key={n+i}>{n}</li>)}</ul>
+                            <ul className="text-sm list-disc list-inside space-y-1">
+                              {(teams[b]||[]).map((raw,i)=>(<li key={raw+i}><NameWithCaptain name={raw} /></li>))}
+                            </ul>
                           </div>
                         )}
                       </div>
@@ -739,7 +959,6 @@ function PublicBoard(){
           )}
         </div>
 
-        {/* Only teams with rosters */}
         {nonEmptyTeams.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             {nonEmptyTeams.map(team=>{
@@ -752,10 +971,9 @@ function PublicBoard(){
                     <span className="ml-3 text-sm font-normal">(<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)</span>
                   </h2>
                   <ul className="space-y-2">
-                    {roster.map((m,i)=>(
-                      <li key={m} className="flex items-center gap-2">
-                        <span className="font-medium w-6 text-right">{i+1}.</span>
-                        <span className="flex-1">{m}</span>
+                    {roster.map((raw)=> (
+                      <li key={raw} className="flex items-center gap-2">
+                        <span className="flex-1"><NameWithCaptain name={raw} /></span>
                       </li>
                     ))}
                   </ul>
@@ -771,9 +989,10 @@ function PublicBoard(){
   );
 }
 
-/* ------------------------------- app switch ------------------------------- */
+/* ─────────────────────────────── App switch ─────────────────────────────── */
 export default function App(){
-  if (isPublic) return <PublicBoard />;      // share: https://YOUR-APP.vercel.app/?public=1
+  const isPublic = typeof window!=="undefined" && new URLSearchParams(window.location.search).get("public")==="1";
+  if (isPublic) return <PublicBoard />;
   const { user, login, logout } = useAuthUser();
   return user ? <League onLogout={logout}/> : <Login onLogin={login}/>;
 }
