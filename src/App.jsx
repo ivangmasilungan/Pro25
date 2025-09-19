@@ -41,10 +41,8 @@ function winnerLabel(g){
 }
 
 /* ─────────────── Name parsing / composing / rendering ───────────────
-   IMPORTANT CHANGE:
-   - Captain marker is **CAPTAIN** (or CAP) in storage.
-   - Position "C" is treated as a normal position (shows as "C").
-   - This fixes the bug where picking position C did not appear.
+   - Captain marker is CAPTAIN (or CAP) in storage.
+   - Position "C" renders as "C" (not Captain).
 */
 const POS_RE = /^(PG|SG|SF|PF|C)$/i;
 const CAP_RE = /^(CAPTAIN|CAP)$/i;
@@ -52,8 +50,8 @@ const CAP_RE = /^(CAPTAIN|CAP)$/i;
 function parseStoredName(raw){
   const s=String(raw||"");
   const m=s.match(/^(.*?)(\s*\((.*)\))\s*$/);
-  const baseWithJersey = (m? m[1] : s).trim(); // e.g., "Marvin C #20"
-  const insideRaw = m? (m[3]||"") : "";        // e.g., "PG, CAPTAIN"
+  const baseWithJersey = (m? m[1] : s).trim();
+  const insideRaw = m? (m[3]||"") : "";
 
   const tokens = insideRaw.split(",").map(t=>t.trim()).filter(Boolean);
 
@@ -62,41 +60,36 @@ function parseStoredName(raw){
   const seen = new Set();
 
   for (const t of tokens) {
-    if (CAP_RE.test(t)) { isCaptain = true; continue; }        // 'CAPTAIN' or 'CAP'
-    if (POS_RE.test(t)) {                                      // positions (including 'C')
-      const up = t.toUpperCase();
-      if (!seen.has(up)) { seen.add(up); otherTags.push(up); }
-      continue;
-    }
-    // keep any extra custom tags (dedup)
-    const key=t.toUpperCase();
-    if (!seen.has(key)) { seen.add(key); otherTags.push(t); }
+    if (CAP_RE.test(t)) { isCaptain = true; continue; }
+    const up = t.toUpperCase();
+    if (!seen.has(up)) { seen.add(up); otherTags.push(up); }
   }
+  // filter positions only once, keep non-dup order already ensured
   return { baseWithJersey, isCaptain, otherTags };
 }
 
 function composeStoredName(baseWithJersey, isCaptain, otherTags){
   const tags = [];
-  // normalize / dedupe positions in uppercase
   const seen=new Set();
   (otherTags||[]).forEach(t=>{
     const up=String(t||"").toUpperCase().trim();
     if (!up) return;
     if (!seen.has(up)) { seen.add(up); tags.push(up); }
   });
-  if (isCaptain) tags.push("CAPTAIN"); // << store CAPTAIN (not C)
+  if (isCaptain) tags.push("CAPTAIN");
   const paren = tags.length ? ` (${tags.join(", ")})` : "";
   return `${baseWithJersey}${paren}`;
 }
 
-/* Visible renderer: prints tags except captain separately,
-   and appends red "Captain" if captain=true. */
+/* Visible renderer: prints tags; appends red "Captain" if captain=true. */
 function NameWithCaptain({ name, className = "" }) {
   const { baseWithJersey, isCaptain, otherTags } = parseStoredName(name);
   const inside = [];
-  otherTags.forEach((p, i) => {
+  // keep positions (including C). Remove CAPTAIN because handled separately.
+  const tags = otherTags.filter(t => !CAP_RE.test(t));
+  tags.forEach((p, i) => {
     inside.push(<span key={`tag-${i}`}>{p}</span>);
-    if (i < otherTags.length - 1 || isCaptain) inside.push(", ");
+    if (i < tags.length - 1 || isCaptain) inside.push(", ");
   });
   if (isCaptain) inside.push(<span key="cap" className="text-red-700 font-semibold">Captain</span>);
   return (
@@ -154,7 +147,7 @@ async function sbBulkUpsert(local){
   if (r1.error||r2.error) throw (r1.error||r2.error);
 }
 
-/* ─────────────────────────────── Login ─────────────────────────────── */
+/* ───────────────────────────── Login ───────────────────────────── */
 function Login({ onLogin }){
   const [u,setU]=useState(""); 
   const [p,setP]=useState("");
@@ -183,7 +176,7 @@ function Login({ onLogin }){
 function League({ onLogout }){
   const [individuals,setIndividuals]=useState([]);
   const [teams,setTeams]=useState(emptyTeams);
-  const [paid,setPaid]=useState({}); // name -> "cash" | "gcash"
+  const [paid,setPaid]=useState({});
   const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
 
   const [newName,setNewName]=useState("");
@@ -195,7 +188,7 @@ function League({ onLogout }){
   const [connErr,setConnErr]=useState("");
 
   // Edit dialog state
-  const [editTarget,setEditTarget]=useState(null); // old stored full
+  const [editTarget,setEditTarget]=useState(null);
   const [editBaseName,setEditBaseName]=useState("");
   const [editJersey,setEditJersey]=useState("");
   const [editPos,setEditPos]=useState("");
@@ -306,7 +299,6 @@ function League({ onLogout }){
 
   useEffect(()=>{ saveLocal(makeLocal()); },[individuals,teams,paid,scores,games]);
 
-  /* compose for Add */
   function composeBaseWithJersey(name, jersey){
     const base = (name||"").trim();
     const j = (jersey||"").trim();
@@ -318,7 +310,7 @@ function League({ onLogout }){
     if(!base) return;
     const baseWithJersey = composeBaseWithJersey(base, newJersey||"");
     const tags = [];
-    if (newPos.trim()) tags.push(newPos.trim().toUpperCase()); // may be "C" position
+    if (newPos.trim()) tags.push(newPos.trim().toUpperCase());
     const stored = composeStoredName(baseWithJersey, newCaptain, tags);
 
     setIndividuals(prev=>prev.concat(stored));
@@ -333,27 +325,20 @@ function League({ onLogout }){
     setTimeout(()=>setFlashName(null),1500);
   };
 
-  /* assign team */
   const assign = async(name,team)=>{ 
     setTeams(prev=>{const c=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(m=>m!==name)])); if(team) c[team]=[...(c[team]||[]),name]; return c;});
     if(SB) try{ await sbUpsertPlayer({full_name:name,team,paid:!!paid[name],payment_method:paid[name]||null}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } 
   };
 
-  /* open Edit dialog (structured) */
   const openEdit = (storedName) => {
     setEditTarget(storedName);
     const { baseWithJersey, isCaptain, otherTags } = parseStoredName(storedName);
-
-    // split baseWithJersey into "Name" + optional " #NN"
     const m = baseWithJersey.match(/^(.*?)(?:\s*#(\d+))?$/);
     setEditBaseName((m?.[1]||"").trim());
     setEditJersey((m?.[2]||"").trim());
-
-    // pick a position tag from otherTags if present (PG/SG/SF/PF/C)
     const pos = (otherTags.find(t=>POS_RE.test(t))||"").toUpperCase();
     setEditPos(pos);
     setEditCaptain(!!isCaptain);
-
     setShowEditModal(true);
   };
 
@@ -363,10 +348,9 @@ function League({ onLogout }){
 
     const baseWithJersey = composeBaseWithJersey(editBaseName||"", editJersey||"");
     const otherTags = [];
-    if (editPos) otherTags.push(editPos); // includes "C" position properly
+    if (editPos) otherTags.push(editPos);
     const newStored = composeStoredName(baseWithJersey, editCaptain, otherTags);
 
-    // update local
     setIndividuals(prev=>prev.map(n=>n===oldStored?newStored:n));
     setTeams(prev=>{
       const c={};
@@ -380,7 +364,6 @@ function League({ onLogout }){
       return np;
     });
 
-    // sync remote
     if(SB){ try{
       const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldStored))||"";
       const method=paid[oldStored]||null;
@@ -392,20 +375,17 @@ function League({ onLogout }){
     setEditTarget(null);
   };
 
-  /* scores buttons */
   const inc = async(team,type,delta)=>{ 
     setScores(prev=>({...prev,[team]:nextScore(prev[team],type,delta)}));
     if(SB) try{ const cur=scores[team]||{win:0,lose:0}; const nv= type==="win"?{win:Math.max(0,cur.win+delta),lose:cur.lose}:{win:cur.win,lose:Math.max(0,cur.lose+delta)}; await sbUpsertScore(team,nv.win,nv.lose);}catch(e){setConn("local"); setConnErr(String(e?.message||e));}
   };
 
-  /* payments */
   const openPayment=(n)=>{ setPayFor(n); setShowPayModal(true); };
   const setPayment=async(method)=>{ const name=payFor; if(!name) return; setPaid(prev=>{const np={...prev}; if(method) np[name]=method; else delete np[name]; return np;});
     if(SB){ try{ const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(name))||""; await sbUpsertPlayer({full_name:name,team:teamRaw,paid:!!method,payment_method:method}); }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowPayModal(false); setPayFor(null);
   };
 
-  /* delete / clear / logout */
   const requestDelete=(n)=>{ setDeleteTarget(n); setShowDeleteModal(true); };
   const doDelete=async()=>{ const n=deleteTarget; if(!n){setShowDeleteModal(false);return;}
     setIndividuals(prev=>prev.filter(x=>x!==n));
@@ -419,7 +399,6 @@ function League({ onLogout }){
   };
   const doLogout=()=>{ setShowLogoutModal(false); onLogout(); };
 
-  /* games (create w/o scores; edit scores later) */
   const resetGameForm=()=>{ setGTitle(""); setGDate(""); setGTime(""); setGLoc(""); setGTeamA(""); setGTeamB(""); };
   const addGame=async(e)=>{ e.preventDefault();
     const row={
@@ -472,7 +451,6 @@ function League({ onLogout }){
       score_a: Number(g.score_a)||0,
       score_b: Number(g.score_b)||0
     };
-    // record adjustment (auto W/L)
     const newGame={...oldGame,...row};
     const oldOc=getOutcome(oldGame);
     const newOc=getOutcome(newGame);
@@ -520,10 +498,19 @@ function League({ onLogout }){
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-2 flex items-center justify-between">
           <div />
-          <span className={`inline-block px-2 py-1 rounded text-xs ${conn==="online"?"bg-green-100 text-green-700":conn==="checking"?"bg-yellow-100 text-yellow-800":"bg-gray-200 text-gray-700"}`}>
-            {conn==="online"?"Supabase connected":conn==="checking"?"Checking…":"Local mode (not syncing)"}
+          <span
+            className={`inline-block px-2 py-1 rounded text-xs ${
+              conn==="online"
+                ? "bg-green-100 text-green-700"
+                : conn==="checking"
+                ? "bg-yellow-100 text-yellow-800"
+                : "bg-gray-200 text-gray-700"
+            }`}
+          >
+            {conn==="online" ? "Supabase connected" : conn==="checking" ? "Checking…" : "Local mode (not syncing)"}
           </span>
         </div>
+
         {conn!=="online" && connErr && (
           <div className="mb-4 text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2">{connErr}</div>
         )}
@@ -568,13 +555,13 @@ function League({ onLogout }){
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
           <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
           <ol className="space-y-2 list-decimal list-inside">
-            {individuals.map((stored, idx)=>{
+            {individuals.map((stored)=>{
               const assigned=Object.keys(teams).find(t=>teams[t].includes(stored))||"";
-              const method=paid[stored]; // "cash" | "gcash"
+              const method=paid[stored];
               const paidBadge = method==="gcash" ? "text-blue-700 bg-blue-100" : "text-green-700 bg-green-100";
               return (
                 <li key={stored} ref={el=>{if(el) itemRefs.current[stored]=el;}}
-                    className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1 "+(flashName===stored?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
+                    className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1"}>
                   <span className="flex-1 font-medium">
                     <NameWithCaptain name={stored} />
                     {method && (
@@ -605,17 +592,17 @@ function League({ onLogout }){
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
           <h3 className="text-lg sm:text-xl font-semibold mb-3">Game Schedule</h3>
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
-            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${(games?.length||0)+1})`} value={gTitle} onChange={(e)=>setGTitle(e.target.value)} />
-            <select className="border rounded-xl px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)}>
+            <input className="border rounded-2xl px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${(games?.length||0)+1})`} value={gTitle} onChange={(e)=>setGTitle(e.target.value)} />
+            <select className="border rounded-2xl px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)}>
               <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
             </select>
-            <select className="border rounded-xl px-3 py-2 h-11" value={gTeamB} onChange={e=>setGTeamB(e.target.value)}>
+            <select className="border rounded-2xl px-3 py-2 h-11" value={gTeamB} onChange={e=>setGTeamB(e.target.value)}>
               <option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
             </select>
-            <input className="border rounded-xl px-3 py-2 h-11" type="date" value={gDate} onChange={e=>setGDate(e.target.value)} />
-            <input className="border rounded-xl px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} />
-            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder="Location / Court" value={gLoc} onChange={e=>setGLoc(e.target.value)} />
-            <button className="h-11 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Create Match</button>
+            <input className="border rounded-2xl px-3 py-2 h-11" type="date" value={gDate} onChange={e=>setGDate(e.target.value)} />
+            <input className="border rounded-2xl px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} />
+            <input className="border rounded-2xl px-3 py-2 h-11 md:col-span-2" placeholder="Location / Court" value={gLoc} onChange={e=>setGLoc(e.target.value)} />
+            <button className="h-11 px-5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white md:col-span-2">Create Match</button>
           </form>
 
           <div className="space-y-3">
@@ -791,7 +778,7 @@ function League({ onLogout }){
         </div>
       )}
 
-      {/* Player Edit (with Captain toggle and Position selector including C) */}
+      {/* Player Edit */}
       {showEditModal && (
         <div className="fixed inset-0 z-50 grid place-items-center">
           <div className="absolute inset-0 bg-black/40" onClick={()=>{setShowEditModal(false); setEditTarget(null);}} />
@@ -817,7 +804,7 @@ function League({ onLogout }){
         </div>
       )}
 
-      {/* Game edit (scores editable here; auto W/L on save) */}
+      {/* Game edit */}
       {showGameEditModal && editLocal && (
         <div className="fixed inset-0 z-50 grid place-items-center">
           <div className="absolute inset-0 bg-black/40" onClick={()=>{setShowGameEditModal(false); setEditLocal(null);}} />
@@ -844,6 +831,36 @@ function League({ onLogout }){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ──────────────────────── Fit-to-Page Desktop Wrapper ─────────────────────── */
+function FitToPage({ designWidth = 1280, children }) {
+  const [scale, setScale] = useState(1);
+
+  const recompute = useCallback(() => {
+    const vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+    const s = Math.min(1, vw / designWidth);
+    setScale(s);
+  }, [designWidth]);
+
+  useEffect(() => {
+    recompute();
+    window.addEventListener("resize", recompute, { passive: true });
+    window.addEventListener("orientationchange", recompute, { passive: true });
+    return () => {
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener("orientationchange", recompute);
+    };
+  }, [recompute]);
+
+  return (
+    <div className="w-screen min-h-screen overflow-x-hidden bg-slate-50" style={{ WebkitTextSizeAdjust: "100%" }}>
+      <div className="mx-auto" style={{ width: designWidth, transform: `scale(${scale})`, transformOrigin: "top left" }}>
+        {children}
+      </div>
+      <div style={{ height: `${(1 - scale) * 100}vh` }} />
     </div>
   );
 }
@@ -887,8 +904,8 @@ function PublicBoard(){
 
   const nonEmptyTeams = TEAMS.filter(t => (teams[t] || []).length > 0);
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
+  const desktopContent = (
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl sm:text-3xl font-bold">
@@ -917,7 +934,7 @@ function PublicBoard(){
                 const showB = rosterB.length > 0;
                 return (
                   <div key={g.id||idx} className="border rounded-2xl p-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
+                    <div className="flex flex-row items-center gap-3 mb-2">
                       <div className="font-semibold min-w-24">{g.title || `Game ${idx+1}`}</div>
                       <div className="text-sm text-gray-700 flex-1">
                         {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
@@ -933,7 +950,7 @@ function PublicBoard(){
                     </div>
 
                     {(showA || showB) && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-3">
                         {showA && (
                           <div className="rounded-lg border p-3">
                             <div className="font-medium mb-2">Team {a || "?"} Roster</div>
@@ -960,13 +977,13 @@ function PublicBoard(){
         </div>
 
         {nonEmptyTeams.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+          <div className="grid grid-cols-3 gap-6">
             {nonEmptyTeams.map(team=>{
               const roster = teams[team] || [];
               const w=scores[team]?.win??0, l=scores[team]?.lose??0;
               return (
-                <section key={team} className="bg-white rounded-2xl shadow-sm border p-4 sm:p-5">
-                  <h2 className="text-lg sm:text-xl font-semibold mb-3">
+                <section key={team} className="bg-white rounded-2xl shadow-sm border p-5">
+                  <h2 className="text-xl font-semibold mb-3">
                     Team {team}
                     <span className="ml-3 text-sm font-normal">(<span className="text-green-600">Win {w}</span> / <span className="text-red-600">Lose {l}</span>)</span>
                   </h2>
@@ -986,6 +1003,12 @@ function PublicBoard(){
         <div className="mt-6 text-center text-sm text-gray-500">Read-only public view • Created By IGM • V1.69</div>
       </div>
     </div>
+  );
+
+  return (
+    <FitToPage designWidth={1280}>
+      {desktopContent}
+    </FitToPage>
   );
 }
 
