@@ -17,7 +17,7 @@ function useAuthUser(){
 
 const TEAMS=["A","B","C","D","E","F","G","H","I","J"];
 const emptyTeams=TEAMS.reduce((a,t)=>{a[t]=[];return a;},{});
-const LS_KEY="paml:v17-positionC-visible-captain-token";
+const LS_KEY="paml:v18:fit-public+sort-dropdown";
 const loadLocal=()=>{try{const s=localStorage.getItem(LS_KEY);return s?JSON.parse(s):null;}catch{return null}}
 const saveLocal=(s)=>{try{localStorage.setItem(LS_KEY,JSON.stringify(s));}catch{}}
 const nextScore=(prev,type,delta)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(delta||0)) });
@@ -40,10 +40,7 @@ function winnerLabel(g){
   return "TBD";
 }
 
-/* ─────────────── Name parsing / composing / rendering ───────────────
-   - Captain marker is CAPTAIN (or CAP) in storage.
-   - Position "C" renders as "C" (not Captain).
-*/
+/* ─────────────── Name parsing / composing / rendering ─────────────── */
 const POS_RE = /^(PG|SG|SF|PF|C)$/i;
 const CAP_RE = /^(CAPTAIN|CAP)$/i;
 
@@ -52,7 +49,6 @@ function parseStoredName(raw){
   const m=s.match(/^(.*?)(\s*\((.*)\))\s*$/);
   const baseWithJersey = (m? m[1] : s).trim();
   const insideRaw = m? (m[3]||"") : "";
-
   const tokens = insideRaw.split(",").map(t=>t.trim()).filter(Boolean);
 
   let isCaptain = false;
@@ -64,7 +60,6 @@ function parseStoredName(raw){
     const up = t.toUpperCase();
     if (!seen.has(up)) { seen.add(up); otherTags.push(up); }
   }
-  // filter positions only once, keep non-dup order already ensured
   return { baseWithJersey, isCaptain, otherTags };
 }
 
@@ -81,11 +76,9 @@ function composeStoredName(baseWithJersey, isCaptain, otherTags){
   return `${baseWithJersey}${paren}`;
 }
 
-/* Visible renderer: prints tags; appends red "Captain" if captain=true. */
 function NameWithCaptain({ name, className = "" }) {
   const { baseWithJersey, isCaptain, otherTags } = parseStoredName(name);
   const inside = [];
-  // keep positions (including C). Remove CAPTAIN because handled separately.
   const tags = otherTags.filter(t => !CAP_RE.test(t));
   tags.forEach((p, i) => {
     inside.push(<span key={`tag-${i}`}>{p}</span>);
@@ -179,6 +172,10 @@ function League({ onLogout }){
   const [paid,setPaid]=useState({});
   const [scores,setScores]=useState(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
 
+  // timestamps & sort mode
+  const [addedAt, setAddedAt] = useState({});
+  const [sortMode, setSortMode] = useState("recent"); // "recent" | "alpha"
+
   const [newName,setNewName]=useState("");
   const [newJersey,setNewJersey]=useState("");
   const [newPos,setNewPos]=useState("");
@@ -187,7 +184,6 @@ function League({ onLogout }){
   const [conn,setConn]=useState("checking"); // online | local | checking
   const [connErr,setConnErr]=useState("");
 
-  // Edit dialog state
   const [editTarget,setEditTarget]=useState(null);
   const [editBaseName,setEditBaseName]=useState("");
   const [editJersey,setEditJersey]=useState("");
@@ -211,11 +207,22 @@ function League({ onLogout }){
   const [gTeamA,setGTeamA]=useState(""); const [gTeamB,setGTeamB]=useState("");
   const [editLocal,setEditLocal]=useState(null); const [showGameEditModal,setShowGameEditModal]=useState(false);
 
-  const makeLocal = (extra={}) => ({ individuals,teams,paid,scores,games, ...extra });
+  const makeLocal = (extra={}) => ({ individuals,teams,paid,scores,games,addedAt,sortMode, ...extra });
+
+  const ensureTimestamps = (names, existingMap={})=>{
+    const now=Date.now();
+    let t=0;
+    const baseTime = now - names.length*1000;
+    const out = {...existingMap};
+    names.forEach((n)=>{ if(out[n]==null){ out[n]=baseTime + (t+=1000); } });
+    Object.keys(out).forEach(k=>{ if(!names.includes(k)) delete out[k]; });
+    return out;
+  };
 
   const applyRemote = (remote)=>{
     const {players, scores:ts, games:gs}=remote||{players:[],scores:[],games:[]};
-    setIndividuals(players.map(p=>p.full_name));
+    const names = players.map(p=>p.full_name);
+    setIndividuals(names);
     const t=TEAMS.reduce((a,k)=>{a[k]=[];return a;},{});
     players.forEach(p=>{ if(p.team && t[p.team]) t[p.team].push(p.full_name); });
     setTeams(t);
@@ -234,40 +241,23 @@ function League({ onLogout }){
       score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
       score_b: Number.isFinite(g.score_b) ? g.score_b : 0
     })));
-    saveLocal({
-      individuals: players.map(p=>p.full_name),
-      teams: t,
-      paid: players.reduce((a,p)=>{ a[p.full_name]=p.payment_method || (p.paid ? "cash" : undefined); return a; },{}),
-      scores: s,
-      games: (gs||[]).map(g=>({
-        id: g.id,
-        title: g.title || "",
-        team_a: g.team_a || "",
-        team_b: g.team_b || "",
-        gdate: g.gdate || "",
-        gtime: g.gtime || "",
-        location: g.location || "",
-        score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
-        score_b: Number.isFinite(g.score_b) ? g.score_b : 0
-      }))
-    });
+    setAddedAt(prev=>ensureTimestamps(names, prev));
+    saveLocal({ individuals:names, teams:t, paid:players.reduce((a,p)=>{ a[p.full_name]=p.payment_method || (p.paid ? "cash" : undefined); return a; },{}), scores:s, games:(gs||[]).map(g=>({
+      id:g.id,title:g.title||"",team_a:g.team_a||"",team_b:g.team_b||"",gdate:g.gdate||"",gtime:g.gtime||"",location:g.location||"",score_a:Number.isFinite(g.score_a)?g.score_a:0,score_b:Number.isFinite(g.score_b)?g.score_b:0
+    })), addedAt:ensureTimestamps(names, addedAt), sortMode });
   };
+
   const applyLocal=(snap)=>{ 
-    setIndividuals(snap.individuals||[]); 
+    const names = snap.individuals||[];
+    setIndividuals(names); 
     setTeams(snap.teams||emptyTeams); 
     setPaid(snap.paid||{}); 
     setScores(snap.scores||TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{})); 
     setGames((snap.games||[]).map(g=>({
-      id: g.id,
-      title: g.title || "",
-      team_a: g.team_a || "",
-      team_b: g.team_b || "",
-      gdate: g.gdate || "",
-      gtime: g.gtime || "",
-      location: g.location || "",
-      score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
-      score_b: Number.isFinite(g.score_b) ? g.score_b : 0
+      id:g.id,title:g.title||"",team_a:g.team_a||"",team_b:g.team_b||"",gdate:g.gdate||"",gtime:g.gtime||"",location:g.location||"",score_a:Number.isFinite(g.score_a)?g.score_a:0,score_b:Number.isFinite(g.score_b)?g.score_b:0
     })));
+    setAddedAt(ensureTimestamps(names, snap.addedAt||{}));
+    setSortMode(snap.sortMode||"recent");
   };
 
   useEffect(()=>{ (async()=>{
@@ -297,13 +287,15 @@ function League({ onLogout }){
     return ()=>{ try{SB.removeChannel(ch);}catch{} };
   },[]);
 
-  useEffect(()=>{ saveLocal(makeLocal()); },[individuals,teams,paid,scores,games]);
+  useEffect(()=>{ saveLocal(makeLocal()); },[individuals,teams,paid,scores,games,addedAt,sortMode]);
 
   function composeBaseWithJersey(name, jersey){
     const base = (name||"").trim();
     const j = (jersey||"").trim();
     return j ? `${base} #${j}` : base;
   }
+
+  // ADD: no auto-scroll after adding player
   const add = async(e)=>{ 
     e.preventDefault();
     const base = (newName||"").trim();
@@ -314,15 +306,17 @@ function League({ onLogout }){
     const stored = composeStoredName(baseWithJersey, newCaptain, tags);
 
     setIndividuals(prev=>prev.concat(stored));
+    setAddedAt(prev=>({ ...prev, [stored]: Date.now() }));
     setNewName(""); setNewJersey(""); setNewPos(""); setNewCaptain(false);
 
     if(SB){ 
       try{ await sbUpsertPlayer({full_name: stored, team: null, paid: false, payment_method: null}); }
       catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
     }
+
     setFlashName(stored);
-    setTimeout(()=>{itemRefs.current[stored]?.scrollIntoView?.({behavior:"smooth",block:"center"});},50);
-    setTimeout(()=>setFlashName(null),1500);
+    // intentionally DO NOT scrollIntoView; keep the viewport where the form is.
+    setTimeout(()=>setFlashName(null),1200);
   };
 
   const assign = async(name,team)=>{ 
@@ -363,6 +357,12 @@ function League({ onLogout }){
       delete np[oldStored];
       return np;
     });
+    setAddedAt(prev=>{
+      const out={...prev};
+      if(prev[oldStored]!=null) out[newStored]=prev[oldStored];
+      delete out[oldStored];
+      return out;
+    });
 
     if(SB){ try{
       const teamRaw=Object.keys(teams).find(t=>(teams[t]||[]).includes(oldStored))||"";
@@ -391,30 +391,22 @@ function League({ onLogout }){
     setIndividuals(prev=>prev.filter(x=>x!==n));
     setTeams(prev=>{const c={}; for(const k in prev) c[k]=prev[k].filter(m=>m!==n); return c;});
     setPaid(prev=>{const nn={...prev}; delete nn[n]; return nn;});
+    setAddedAt(prev=>{const x={...prev}; delete x[n]; return x;});
     if(SB) try{ await sbDeletePlayer(n);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
     setShowDeleteModal(false); setDeleteTarget(null);
   };
   const doClearAll=async()=>{ if(SB){ try{await sbDeleteAllPlayers();}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
-    setIndividuals([]); setTeams(emptyTeams); setPaid({}); saveLocal(makeLocal({individuals:[],teams:emptyTeams,paid:{}})); setShowClearModal(false);
+    setIndividuals([]); setTeams(emptyTeams); setPaid({}); setAddedAt({});
+    saveLocal(makeLocal({individuals:[],teams:emptyTeams,paid:{},addedAt:{}}));
+    setShowClearModal(false);
   };
   const doLogout=()=>{ setShowLogoutModal(false); onLogout(); };
 
   const resetGameForm=()=>{ setGTitle(""); setGDate(""); setGTime(""); setGLoc(""); setGTeamA(""); setGTeamB(""); };
   const addGame=async(e)=>{ e.preventDefault();
-    const row={
-      title:(gTitle||"").trim()||`Game ${(games?.length||0)+1}`,
-      team_a: gTeamA,
-      team_b: gTeamB,
-      gdate: gDate || null,
-      gtime: gTime || null,
-      location: gLoc || null,
-      score_a: 0,
-      score_b: 0
-    };
-    if(SB){ try{
-      const ins=await sbInsertGame(row);
-      setGames(prev=>[...prev,{ id: ins.id, ...row }]);
-    }catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
+    const row={ title:(gTitle||"").trim()||`Game ${(games?.length||0)+1}`, team_a:gTeamA, team_b:gTeamB, gdate:gDate||null, gtime:gTime||null, location:gLoc||null, score_a:0, score_b:0 };
+    if(SB){ try{ const ins=await sbInsertGame(row); setGames(prev=>[...prev,{ id: ins.id, ...row }]); }
+      catch(e){ setConn("local"); setConnErr(String(e?.message||e)); setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]); } }
     else setGames(prev=>[...prev,{ id:crypto.randomUUID?.()||String(Date.now()), ...row }]);
     resetGameForm();
   };
@@ -439,18 +431,10 @@ function League({ onLogout }){
   };
 
   const requestEditGame=(g)=>{ setEditLocal({...g}); setShowGameEditModal(true); };
+
   const saveGameEdit=async()=>{ const g=editLocal; if(!g) return; const id=g.id;
     const oldGame=games.find(x=>x.id===id)||{};
-    const row={
-      title: (g.title||"").trim()||"Game",
-      team_a: g.team_a,
-      team_b: g.team_b,
-      gdate: g.gdate || null,
-      gtime: g.gtime || null,
-      location: g.location || null,
-      score_a: Number(g.score_a)||0,
-      score_b: Number(g.score_b)||0
-    };
+    const row={ title:(g.title||"").trim()||"Game", team_a:g.team_a, team_b:g.team_b, gdate:g.gdate||null, gtime:g.gtime||null, location:g.location||null, score_a:Number(g.score_a)||0, score_b:Number(g.score_b)||0 };
     const newGame={...oldGame,...row};
     const oldOc=getOutcome(oldGame);
     const newOc=getOutcome(newGame);
@@ -475,6 +459,7 @@ function League({ onLogout }){
     if(SB){ try{ await sbUpdateGame(id,row);}catch(e){ setConn("local"); setConnErr(String(e?.message||e)); } }
     setShowGameEditModal(false); setEditLocal(null);
   };
+
   const deleteGame=async(id)=>{
     const g=games.find(x=>x.id===id);
     if (g){
@@ -492,7 +477,28 @@ function League({ onLogout }){
 
   const rosterFor=(letter)=>letter && teams[letter]?teams[letter]:[];
 
-  /* ───────────────────────────── UI (Admin) ───────────────────────────── */
+  // Sorted view
+  const sortedIndividuals = React.useMemo(()=>{
+    const arr=[...individuals];
+    if (sortMode==="alpha"){
+      return arr.sort((a,b)=>{
+        const A=parseStoredName(a).baseWithJersey.toLowerCase();
+        const B=parseStoredName(b).baseWithJersey.toLowerCase();
+        return A.localeCompare(B);
+      });
+    }
+    return arr.sort((a,b)=>(addedAt[b]??0)-(addedAt[a]??0));
+  },[individuals,sortMode,addedAt]);
+
+  // dropdown state (beside "Players")
+  const [sortOpen,setSortOpen]=useState(false);
+  const sortRef=useRef(null);
+  useEffect(()=>{
+    function onDoc(e){ if(sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false); }
+    document.addEventListener("click",onDoc);
+    return ()=>document.removeEventListener("click",onDoc);
+  },[]);
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
       <div className="mx-auto w-full max-w-6xl">
@@ -500,11 +506,7 @@ function League({ onLogout }){
           <div />
           <span
             className={`inline-block px-2 py-1 rounded text-xs ${
-              conn==="online"
-                ? "bg-green-100 text-green-700"
-                : conn==="checking"
-                ? "bg-yellow-100 text-yellow-800"
-                : "bg-gray-200 text-gray-700"
+              conn==="online" ? "bg-green-100 text-green-700" : conn==="checking" ? "bg-yellow-100 text-yellow-800" : "bg-gray-200 text-gray-700"
             }`}
           >
             {conn==="online" ? "Supabase connected" : conn==="checking" ? "Checking…" : "Local mode (not syncing)"}
@@ -524,17 +526,13 @@ function League({ onLogout }){
                 {individuals.length} {individuals.length===1?"Player":"Players"}
               </span>
             </h1>
-            <a
-              className="text-sm h-10 px-4 rounded-xl border hover:bg-slate-50 inline-flex items-center"
-              href={`${location.origin}${location.pathname}?public=1`}
-              target="_blank" rel="noreferrer"
-            >
+            <a className="text-sm h-10 px-4 rounded-xl border hover:bg-slate-50 inline-flex items-center" href={`${location.origin}${location.pathname}?public=1`} target="_blank" rel="noreferrer">
               Open Public Link
             </a>
           </div>
 
           {/* Add Player */}
-          <form onSubmit={add} className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+          <form onSubmit={add} className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
             <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder="Full name (e.g., Marvin)" value={newName} onChange={(e)=>setNewName(e.target.value)} />
             <input className="border rounded-xl px-3 py-2 h-11" placeholder="Jersey #" inputMode="numeric" value={newJersey} onChange={(e)=>setNewJersey(e.target.value)} />
             <select className="border rounded-xl px-3 py-2 h-11" value={newPos} onChange={(e)=>setNewPos(e.target.value)}>
@@ -553,15 +551,45 @@ function League({ onLogout }){
 
         {/* players */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-lg sm:text-xl font-semibold">Players</h3>
+            {/* SORT DROPDOWN BESIDE "Players" */}
+            <div className="relative" ref={sortRef}>
+              <button
+                type="button"
+                onClick={()=>setSortOpen(v=>!v)}
+                className="inline-flex items-center gap-2 px-3 h-10 rounded-xl border bg-white hover:bg-slate-50"
+              >
+                {sortMode==="recent" ? "Most Recent" : "Alphabetical (A–Z)"} <span>▾</span>
+              </button>
+              {sortOpen && (
+                <div className="absolute right-0 mt-2 w-56 rounded-2xl border bg-white shadow-lg overflow-hidden z-10">
+                  <div className="py-1 text-sm">
+                    <button
+                      className={`w-full text-left px-4 py-2 hover:bg-slate-50 ${sortMode==="recent"?"font-semibold":""}`}
+                      onClick={()=>{setSortMode("recent"); setSortOpen(false);}}
+                    >
+                      Most Recent
+                    </button>
+                    <button
+                      className={`w-full text-left px-4 py-2 hover:bg-slate-50 ${sortMode==="alpha"?"font-semibold":""}`}
+                      onClick={()=>{setSortMode("alpha"); setSortOpen(false);}}
+                    >
+                      Alphabetical (A–Z)
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           <ol className="space-y-2 list-decimal list-inside">
-            {individuals.map((stored)=>{
+            {sortedIndividuals.map((stored)=>{
               const assigned=Object.keys(teams).find(t=>teams[t].includes(stored))||"";
               const method=paid[stored];
               const paidBadge = method==="gcash" ? "text-blue-700 bg-blue-100" : "text-green-700 bg-green-100";
               return (
-                <li key={stored} ref={el=>{if(el) itemRefs.current[stored]=el;}}
-                    className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1"}>
+                <li key={stored} ref={el=>{if(el) itemRefs.current[stored]=el;}} className={"flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-lg px-2 py-1 "+(flashName===stored?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
                   <span className="flex-1 font-medium">
                     <NameWithCaptain name={stored} />
                     {method && (
@@ -570,7 +598,6 @@ function League({ onLogout }){
                       </span>
                     )}
                   </span>
-
                   <div className="flex flex-wrap items-center gap-2">
                     <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={(e)=>assign(stored,e.target.value)}>
                       <option value="">No Team</option>
@@ -1000,7 +1027,7 @@ function PublicBoard(){
           </div>
         )}
 
-        <div className="mt-6 text-center text-sm text-gray-500">Read-only public view • Created By IGM • V1.69</div>
+        <div className="mt-6 text-center text-sm text-gray-500">Read-only public view • Created By IGM • V1.70</div>
       </div>
     </div>
   );
