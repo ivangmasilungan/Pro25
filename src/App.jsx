@@ -4,8 +4,9 @@ import { supabase as SB } from "./lib/supabase";
 
 /* ============================= constants/utils ============================= */
 const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
+const TEAM_CAP = 5; // max players per team
 const EMPTY_TEAMS = TEAMS.reduce((a,t)=>{a[t]=[];return a;}, {});
-const LS_KEY        = "paml:v45";
+const LS_KEY        = "paml:v49";
 const LS_LOGS       = "paml_logs:v1";
 const LS_LOGS_BUMP  = "paml_logs_bump:v1";
 
@@ -47,7 +48,7 @@ function parseStoredName(raw){
 }
 function composeStoredName(baseWithJersey,isCaptain,otherTags){
   const tags=[]; const seen=new Set();
-  (otherTags||[]).forEach(t=>{const up=String(t||"").toUpperCase().trim(); if(up&&!seen.has(up)){seen.add(up); tags.push(up);}});
+  (otherTags||[]).forEach(t=>{const up=String(t||"").toUpperCase().trim(); if(up&&!seen.has(up)){seen.add(up); tags.push(up);} });
   if(isCaptain) tags.push("CAPTAIN");
   return `${baseWithJersey}${tags.length?` (${tags.join(", ")})`:""}`;
 }
@@ -139,6 +140,16 @@ async function sbGetLog(dateISO){
     const map=getLocalLogs(); return map[dateISO]||null;
   }
 }
+async function sbDeleteLog(dateISO){
+  try{
+    const {error}=await SB.from("league_logs").delete().eq("log_date",dateISO);
+    if(error) throw error;
+    return true;
+  }catch{
+    const map=getLocalLogs(); if(map[dateISO]){ delete map[dateISO]; setLocalLogs(map); return true; }
+    return false;
+  }
+}
 async function sbClearLogs() {
   try {
     const sel = await SB.from("league_logs").select("log_date");
@@ -215,9 +226,9 @@ function League({onLogout}){
   const [editTarget,setEditTarget]=useState(null),[editBase,setEditBase]=useState(""),[editJersey,setEditJersey]=useState(""),[editPos,setEditPos]=useState(""),[editCaptain,setEditCaptain]=useState(false);
   const [showGameEditModal,setShowGameEditModal]=useState(false); const [editGame,setEditGame]=useState(null);
 
-  // Clear Logs modal
-  const [showClearLogsModal,setShowClearLogsModal]=useState(false);
-  const [clearPwd,setClearPwd]=useState("");
+  // NEW: delete-one-log modal
+  const [showDeleteLogModal,setShowDeleteLogModal]=useState(false);
+  const [deleteLogDate,setDeleteLogDate]=useState("");
 
   // add form
   const [newName,setNewName]=useState(""),[newJersey,setNewJersey]=useState(""),[newPos,setNewPos]=useState(""),[newCaptain,setNewCaptain]=useState(false);
@@ -301,7 +312,7 @@ function League({onLogout}){
   const assignTeam=(name,team)=>{
     setTeams(prev=>{
       const cleared=Object.fromEntries(Object.entries(prev).map(([k,a])=>[k,a.filter(n=>n!==name)]));
-      if(team) cleared[team]=[...(cleared[team]||[]),name];
+      if(team && (cleared[team]?.length??0) < TEAM_CAP) cleared[team]=[...(cleared[team]||[]),name];
       return cleared;
     });
     if(SB && viewDate==="LIVE") sbUpsertPlayer({full_name:name,team,paid:!!paid[name],payment_method:paid[name]||null}).catch(e=>{setConn("local"); setConnErr(String(e?.message||e));});
@@ -445,39 +456,6 @@ function League({onLogout}){
     alert(`Saved log for ${dateStr}`);
   };
 
-  // broadcast to public
-  const broadcastLogsCleared = async () => {
-    try{
-      const chan = SB.channel("logs-bus");
-      await chan.subscribe();
-      await chan.send({ type:"broadcast", event:"logs_cleared", payload:{ ts: Date.now() } });
-      try{ SB.removeChannel(chan); }catch{}
-    }catch{}
-  };
-
-  const doClearAdminOnly = async ()=>{
-    setLocalLogs({});
-    try { localStorage.setItem(LS_LOGS_BUMP, String(Date.now())); } catch {}
-    await refreshAdminDates();
-  };
-  const doClearPublicOnly = async ()=>{
-    const ok = await sbClearLogs();
-    if(ok){
-      await broadcastLogsCleared();
-      await refreshAdminDates();
-    } else {
-      alert("DB refused to clear logs. Check console for error from [sbClearLogs].");
-    }
-  };
-  const doClearBoth = async ()=>{
-    await doClearPublicOnly();
-    await doClearAdminOnly();
-    if(viewDate!=="LIVE"){
-      setViewDate("LIVE");
-      const snap=getLocal(); if(snap) applyPayload(snap);
-    }
-  };
-
   const loadLogDate = async (d) => {
     if(d==="LIVE"){ setViewDate("LIVE"); const snap=getLocal(); if(snap) applyPayload(snap); return; }
     const p = await sbGetLog(d);
@@ -486,11 +464,10 @@ function League({onLogout}){
     setViewDate(d);
   };
 
-  /* NEW: "New" — wipe all inputs (players, teams, paid, scores, games) */
+  /* NEW: "New" — wipe all inputs */
   const newBlank = async () => {
     if(!confirm("Start a NEW blank league? This clears players, teams, games, and scores.")) return;
 
-    // local state reset
     setIndividuals([]);
     setAddedSeq([]);
     setTeams(EMPTY_TEAMS);
@@ -498,16 +475,51 @@ function League({onLogout}){
     setScores(TEAMS.reduce((a,t)=>{a[t]={win:0,lose:0};return a;},{}));
     setGames([]);
 
-    // persist locally for LIVE
     if(viewDate==="LIVE") setLocal(makeLocal({}));
 
-    // also clear remote when online + LIVE
     if(SB && viewDate==="LIVE"){
       try { await sbDeleteAllPlayers(); } catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
       try { await sbDeleteAllGames(); } catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
       for(const t of TEAMS){
         try { await sbUpsertScore(t,0,0); } catch(e){ setConn("local"); setConnErr(String(e?.message||e)); }
       }
+    }
+  };
+
+  /* NEW: Shuffle — assign unassigned players ONLY to existing (non-empty) teams with space (<5) */
+  const shuffleAssign = async () => {
+    if(viewDate!=="LIVE") return;
+
+    const nextTeams = TEAMS.reduce((acc,t)=>{ acc[t] = [...(teams[t]||[])]; return acc; }, {});
+    const hasSpace = (t)=> (nextTeams[t]?.length ?? 0) < TEAM_CAP;
+    const isExisting = (t)=> (nextTeams[t]?.length ?? 0) > 0;
+
+    const assignedSet = new Set(TEAMS.flatMap(t => nextTeams[t]||[]));
+    const pool = individuals.filter(n => !assignedSet.has(n));
+    if(pool.length===0){ alert("No unassigned players to shuffle."); return; }
+
+    const updates=[];
+    const shuffled = [...pool].sort(()=>Math.random()-0.5);
+    for(const name of shuffled){
+      const candidates = TEAMS.filter(t => isExisting(t) && hasSpace(t));
+      if(candidates.length===0) break;
+      const team = candidates[Math.floor(Math.random()*candidates.length)];
+      nextTeams[team].push(name);
+      updates.push({name,team});
+    }
+    if(updates.length===0){ alert("No moves made. All existing teams are full."); return; }
+
+    setTeams(nextTeams);
+
+    if(SB){
+      await Promise.allSettled(
+        updates.map(u => sbUpsertPlayer({
+          full_name: u.name,
+          team: u.team,
+          paid: !!paid[u.name],
+          payment_method: paid[u.name] || null
+        }))
+      );
     }
   };
 
@@ -524,9 +536,6 @@ function League({onLogout}){
     const leftovers = individuals.filter(n=>!addedSeq.includes(n));
     return [...inSeq, ...leftovers]; // newest last
   },[individuals,addedSeq,sortMode]);
-
-  const [openSort,setOpenSort]=useState(false); const sortRef=useRef(null);
-  useEffect(()=>{const onDoc=(e)=>{if(sortRef.current&&!sortRef.current.contains(e.target)) setOpenSort(false);}; document.addEventListener("click",onDoc); return()=>document.removeEventListener("click",onDoc);},[]);
 
   const publicUrl=`${location.origin}${location.pathname}?public=1`;
 
@@ -558,7 +567,6 @@ function League({onLogout}){
                 <option value="LIVE">LIVE (current)</option>
                 {logDates.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
-              {/* NEW button */}
               <button
                 className="h-10 px-4 rounded-xl border text-slate-700 hover:bg-slate-50"
                 onClick={newBlank}
@@ -571,7 +579,17 @@ function League({onLogout}){
             <div className="flex items-center gap-2">
               <input type="date" className="border rounded-xl h-10 px-3" value={logDate} onChange={e=>setLogDate(e.target.value)}/>
               <button className="h-10 px-4 rounded-xl bg-blue-600 text-white" onClick={saveLog}>Save Log</button>
-              <button className="h-10 px-4 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50" onClick={()=>{setClearPwd(""); setShowClearLogsModal(true);}}>Clear Logs…</button>
+              {/* CHANGED: Clear Logs -> Delete (pick a date) */}
+              <button
+                className="h-10 px-4 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50"
+                onClick={()=>{
+                  if(logDates.length===0){ alert("No saved logs to delete."); return; }
+                  setDeleteLogDate(logDates[0] || "");
+                  setShowDeleteLogModal(true);
+                }}
+              >
+                Delete…
+              </button>
             </div>
           </div>
         </div>
@@ -602,9 +620,19 @@ function League({onLogout}){
 
         {/* players */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="text-lg sm:text-xl font-semibold">Players</h3>
-            <SortDropdown sortMode={sortMode} setSortMode={setSortMode}/>
+            <div className="flex items-center gap-2">
+              <SortDropdown sortMode={sortMode} setSortMode={setSortMode}/>
+              <button
+                className="h-10 px-4 rounded-xl bg-purple-600 text-white disabled:opacity-50"
+                onClick={shuffleAssign}
+                disabled={viewDate!=="LIVE"}
+                title="Randomly distribute unassigned players to existing teams only (max 5 per team)"
+              >
+                Shuffle
+              </button>
+            </div>
           </div>
 
           <ol className="space-y-2 list-decimal list-inside">
@@ -621,7 +649,12 @@ function League({onLogout}){
                     </span>
                     <div className="flex flex-wrap items-center gap-2">
                       <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={e=>assignTeam(stored,e.target.value)} disabled={viewDate!=="LIVE"}>
-                        <option value="">No Team</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}
+                        <option value="">No Team</option>
+                        {TEAMS.map(t=>{
+                          const cnt=(teams[t]?.length||0);
+                          const full=cnt >= TEAM_CAP;
+                          return <option key={t} value={t} disabled={full}>Team {t}{full?" (Full)":""}</option>;
+                        })}
                       </select>
                       <button onClick={()=>{setPayTarget(stored); setShowPayModal(true);}} className={`h-9 px-3 rounded-lg text-white ${method?"bg-green-700":"bg-green-500"}`} disabled={viewDate!=="LIVE"}>{method?"Change Paid":"Paid"}</button>
                       <button onClick={()=>openEdit(stored)} className="h-9 px-3 rounded-lg bg-yellow-500 text-white" disabled={viewDate!=="LIVE"}>Edit</button>
@@ -701,7 +734,6 @@ function League({onLogout}){
         {/* footer */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-6">
           <button onClick={()=>setShowClearModal(true)} className="h-10 px-5 rounded-xl border text-red-700 border-red-300 hover:bg-red-50" disabled={viewDate!=="LIVE"}>Clear All Players</button>
-          <button onClick={()=>setShowClearLogsModal(true)} className="h-10 px-5 rounded-xl border border-rose-300 text-rose-700">Clear Logs…</button>
           <button onClick={()=>setShowLogoutModal(true)} className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white">Logout</button>
         </div>
       </div>
@@ -795,60 +827,46 @@ function League({onLogout}){
           </div>
         </Modal>
       )}
-      {showClearLogsModal && (
-        <Modal onClose={()=>setShowClearLogsModal(false)}>
-          <h4 className="text-lg font-semibold mb-3">Clear Logs</h4>
-          <div className="text-sm text-gray-600 mb-2">Enter password to enable options.</div>
-          <input
-            type="password"
-            className="w-full h-11 border rounded-lg px-3 mb-3"
-            placeholder="Password (1234)"
-            value={clearPwd}
-            onChange={(e)=>setClearPwd(e.target.value)}
-          />
-          <div className="grid gap-2">
-            <button
-              className="h-11 rounded-lg bg-green-600 text-white disabled:opacity-50"
-              disabled={clearPwd!=="1234"}
-              onClick={async ()=>{
-                await (async()=>{ setLocalLogs({}); try { localStorage.setItem(LS_LOGS_BUMP, String(Date.now())); } catch {} await refreshAdminDates(); })();
-                setShowClearLogsModal(false);
-                alert("Cleared admin logs only.");
-              }}>
-              Admin only
-            </button>
-            <button
-              className="h-11 rounded-lg bg-sky-600 text-white disabled:opacity-50"
-              disabled={clearPwd!=="1234"}
-              onClick={async ()=>{
-                const ok = await sbClearLogs();
-                if(ok){ 
-                  try{ const chan=SB.channel("logs-bus"); await chan.subscribe(); await chan.send({type:"broadcast",event:"logs_cleared",payload:{ts:Date.now()}}); try{SB.removeChannel(chan);}catch{} }catch{}
-                  await refreshAdminDates();
-                }
-                setShowClearLogsModal(false);
-                alert("Cleared public logs only.");
-              }}>
-              Public only
-            </button>
-            <button
-              className="h-11 rounded-lg border disabled:opacity-50"
-              disabled={clearPwd!=="1234"}
-              onClick={async ()=>{
-                const ok = await sbClearLogs();
-                if(ok){ try{ const chan=SB.channel("logs-bus"); await chan.subscribe(); await chan.send({type:"broadcast",event:"logs_cleared",payload:{ts:Date.now()}}); try{SB.removeChannel(chan);}catch{} }catch{} }
-                setLocalLogs({});
-                try { localStorage.setItem(LS_LOGS_BUMP, String(Date.now())); } catch {}
-                await refreshAdminDates();
-                if(viewDate!=="LIVE"){ setViewDate("LIVE"); const snap=getLocal(); if(snap) applyPayload(snap); }
-                setShowClearLogsModal(false);
-                alert("Cleared admin and public logs.");
-              }}>
-              Clear BOTH (admin + public)
-            </button>
+      {showDeleteLogModal && (
+        <Modal onClose={()=>setShowDeleteLogModal(false)}>
+          <h4 className="text-lg font-semibold mb-3">Delete a Saved Log</h4>
+          <p className="text-sm text-gray-600 mb-3">Choose which date to delete from the log archive.</p>
+          <div className="grid gap-3">
+            <select
+              className="border rounded-lg h-11 px-3"
+              value={deleteLogDate}
+              onChange={(e)=>setDeleteLogDate(e.target.value)}
+            >
+              {logDates.length===0 && <option value="">(No logs)</option>}
+              {logDates.map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
           </div>
-          <div className="text-right mt-3">
-            <button className="h-9 px-3 rounded-lg border" onClick={()=>setShowClearLogsModal(false)}>Close</button>
+          <div className="flex justify-end gap-2 mt-4">
+            <button className="h-10 px-4 rounded-lg border" onClick={()=>setShowDeleteLogModal(false)}>Cancel</button>
+            <button
+              className="h-10 px-4 rounded-lg bg-red-600 text-white disabled:opacity-50"
+              disabled={!deleteLogDate}
+              onClick={async ()=>{
+                const target=deleteLogDate;
+                const ok = await sbDeleteLog(target);
+                if(ok){
+                  // if current view is the deleted date, bounce back to LIVE
+                  if(viewDate===target){
+                    setViewDate("LIVE");
+                    const snap=getLocal(); if(snap) applyPayload(snap);
+                  }
+                  await refreshAdminDates();
+                  // notify local tabs / public watcher (optional bump)
+                  try { localStorage.setItem(LS_LOGS_BUMP, String(Date.now())); } catch {}
+                  alert(`Deleted log: ${target}`);
+                }else{
+                  alert("Failed to delete that log.");
+                }
+                setShowDeleteLogModal(false);
+              }}
+            >
+              Delete
+            </button>
           </div>
         </Modal>
       )}
