@@ -10,10 +10,20 @@ const LS_KEY        = "paml:v49";
 const LS_LOGS       = "paml_logs:v1";
 const LS_LOGS_BUMP  = "paml_logs_bump:v1";
 
-const getLocal = () => { try { const s=localStorage.getItem(LS_KEY); return s?JSON.parse(s):null; } catch { return null; } };
+const getLocal = () => {
+  try {
+    const s = localStorage.getItem(LS_KEY);
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+};
 const setLocal = (x) => { try { localStorage.setItem(LS_KEY, JSON.stringify(x)); } catch {} };
 
-const getLocalLogs = () => { try { const s=localStorage.getItem(LS_LOGS); return s?JSON.parse(s):{}; } catch { return {}; } };
+const getLocalLogs = () => {
+  try {
+    const s = localStorage.getItem(LS_LOGS);
+    return s ? JSON.parse(s) : {};
+  } catch { return {}; }
+};
 const setLocalLogs = (obj) => { try { localStorage.setItem(LS_LOGS, JSON.stringify(obj)); } catch {} };
 
 const POS_RE=/^(PG|SG|SF|PF|C)$/i;
@@ -184,9 +194,9 @@ function Login({onLogin}){
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm">
         <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
         <form className="space-y-3" onSubmit={(e)=>{e.preventDefault(); if(u===U&&p===P) onLogin(u); else alert("Invalid");}}>
-          <input className="w-full h-11 px-3 border rounded-xl" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
-          <input className="w-full h-11 px-3 border rounded-xl" type="password" placeholder="Password" value={p} onChange={e=>setP(e.target.value)} />
-          <button className="w-full h-11 rounded-xl bg-blue-600 text-white">Login</button>
+          <input className="w-full h-12 px-3 border rounded-xl" placeholder="Username" value={u} onChange={e=>setU(e.target.value)} />
+          <input className="w-full h-12 px-3 border rounded-xl" type="password" placeholder="Password" value={p} onChange={e=>setP(e.target.value)} />
+          <button className="w-full h-12 rounded-xl bg-blue-600 text-white active:scale-[.99]">Login</button>
         </form>
       </div>
     </div>
@@ -280,15 +290,44 @@ function League({onLogout}){
     names.forEach(n=>{ if(!s.includes(n)) s.push(n); });
     return s;
   };
+
   const applyRemote=(data, baseSeq=[])=>{
     const ps=data.players||[];
     const names=ps.map(p=>p.full_name);
     setIndividuals(names);
     setAddedSeq(ensureSeq(names, baseSeq));
-    const t=TEAMS.reduce((a,k)=>{a[k]=[];return a;},{}); ps.forEach(p=>{ if(p.team&&t[p.team]) t[p.team].push(p.full_name); }); setTeams(t);
-    setPaid(ps.reduce((a,p)=>{ if(p.payment_method||p.paid) a[p.full_name]=p.payment_method||"cash"; return a; },{}));
-    const s=TEAMS.reduce((a,k)=>{a[k]={win:0,lose:0};return a;},{}); (data.scores||[]).forEach(r=>{ if(s[r.team]) s[r.team]={win:r.wins||0,lose:r.losses||0}; }); setScores(s);
-    setGames((data.games||[]).map(g=>({id:g.id,title:g.title||"",team_a:g.team_a||"",team_b:g.team_b||"",gdate:g.gdate||"",gtime:g.gtime||"",location:g.location||"",score_a:Number.isFinite(g.score_a)?g.score_a:0,score_b:Number.isFinite(g.score_b)?g.score_b:0})));
+
+    // Teams
+    const t = TEAMS.reduce((a,k)=>{ a[k]=[]; return a; },{});
+    ps.forEach(p=>{ if(p.team && t[p.team]) t[p.team].push(p.full_name); });
+    setTeams(t);
+
+    // Paid map
+    setPaid(ps.reduce((a,p)=>{
+      if(p.payment_method || p.paid) a[p.full_name] = p.payment_method || "cash";
+      return a;
+    },{}));
+
+    // Scores
+    const s = TEAMS.reduce((a,k)=>{ a[k]={win:0,lose:0}; return a; },{});
+    (data.scores||[]).forEach(r=>{
+      if(s[r.team]) s[r.team] = { win: r.wins || 0, lose: r.losses || 0 };
+    });
+    setScores(s);
+
+    // Games
+    setGames((data.games||[]).map(g=>({
+      id: g.id,
+      title: g.title || "",
+      team_a: g.team_a || "",
+      team_b: g.team_b || "",
+      gdate: g.gdate || "",
+      gtime: g.gtime || "",
+      location: g.location || "",
+      score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
+      score_b: Number.isFinite(g.score_b) ? g.score_b : 0
+    })));
+
     setLocal(makeLocal({}));
   };
 
@@ -540,48 +579,42 @@ function League({onLogout}){
   const publicUrl=`${location.origin}${location.pathname}?public=1`;
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 md:p-8">
+    <div className="min-h-[100dvh] bg-slate-50 p-3 sm:p-6 md:p-8 pb-[max(16px,env(safe-area-inset-bottom))]">
       <div className="mx-auto w-full max-w-6xl">
         {/* top bar */}
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className={`inline-block px-2 py-1 rounded text-xs ${conn==="online"?"bg-green-100 text-green-700":conn==="checking"?"bg-yellow-100 text-yellow-800":"bg-gray-200 text-gray-700"}`}>
-              {conn==="online"?"Supabase connected":conn==="checking"?"Checking…":"Local mode (not syncing)"}
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <a className="text-sm h-9 px-3 rounded-xl border hover:bg-slate-50 inline-flex items-center" href={publicUrl} target="_blank" rel="noreferrer">Open Public Link</a>
+        <div className="sticky top-0 z-20 -mx-3 sm:mx-0 px-3 pt-3 pb-2 sm:p-0 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/70">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className={`inline-block px-2 py-1 rounded text-xs ${conn==="online"?"bg-green-100 text-green-700":conn==="checking"?"bg-yellow-100 text-yellow-800":"bg-gray-200 text-gray-700"}`}>
+                {conn==="online"?"Supabase connected":conn==="checking"?"Checking…":"Local mode (not syncing)"}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a className="text-sm h-10 px-3 rounded-xl border hover:bg-slate-50 inline-flex items-center active:scale-[.99]" href={publicUrl} target="_blank" rel="noreferrer">Open Public Link</a>
+            </div>
           </div>
         </div>
 
-        {conn!=="online"&&connErr && <div className="mb-4 text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2">{connErr}</div>}
+        {conn!=="online"&&connErr && <div className="mt-3 mb-4 text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2">{connErr}</div>}
 
         {/* Logs toolbar */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-5 mb-6">
           <div className="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold">Log Viewer:</span>
-              <select className="border rounded-xl h-10 px-3"
-                value={viewDate}
-                onChange={e=>loadLogDate(e.target.value)}>
+              <select className="border rounded-xl h-11 px-3 min-w-[160px]" value={viewDate} onChange={e=>loadLogDate(e.target.value)}>
                 <option value="LIVE">LIVE (current)</option>
                 {logDates.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
-              <button
-                className="h-10 px-4 rounded-xl border text-slate-700 hover:bg-slate-50"
-                onClick={newBlank}
-                title="Start a fresh blank league"
-                disabled={viewDate!=="LIVE"}
-              >
+              <button className="h-11 px-4 rounded-xl border text-slate-700 hover:bg-slate-50 inline-flex items-center active:scale-[.99]" onClick={newBlank} title="Start a fresh blank league" disabled={viewDate!=="LIVE"}>
                 New
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <input type="date" className="border rounded-xl h-10 px-3" value={logDate} onChange={e=>setLogDate(e.target.value)}/>
-              <button className="h-10 px-4 rounded-xl bg-blue-600 text-white" onClick={saveLog}>Save Log</button>
-              {/* CHANGED: Clear Logs -> Delete (pick a date) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="date" className="border rounded-xl h-11 px-3" value={logDate} onChange={e=>setLogDate(e.target.value)}/>
+              <button className="h-11 px-4 rounded-xl bg-blue-600 text-white active:scale-[.99]" onClick={saveLog}>Save Log</button>
               <button
-                className="h-10 px-4 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50"
+                className="h-11 px-4 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50 active:scale-[.99]"
                 onClick={()=>{
                   if(logDates.length===0){ alert("No saved logs to delete."); return; }
                   setDeleteLogDate(logDates[0] || "");
@@ -599,21 +632,21 @@ function League({onLogout}){
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold">
               Perpetual Alumni
-              <span className="ml-3 align-middle text-sm font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+              <span className="ml-2 sm:ml-3 align-middle text-sm font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
                 {individuals.length} {individuals.length===1?"Player":"Players"}
               </span>
               {viewDate!=="LIVE" && <span className="ml-2 text-xs px-2 py-1 rounded bg-slate-100 text-slate-700">{viewDate} (log)</span>}
             </h1>
           </div>
           <form onSubmit={addPlayer} className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
-            <input className="border rounded-xl px-3 py-2 h-11 md:col-span-2" placeholder="Full name" value={newName} onChange={e=>setNewName(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <input className="border rounded-xl px-3 py-2 h-11" placeholder="Jersey #" inputMode="numeric" value={newJersey} onChange={e=>setNewJersey(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <select className="border rounded-xl px-3 py-2 h-11" value={newPos} onChange={e=>setNewPos(e.target.value)} disabled={viewDate!=="LIVE"}>
+            <input className="border rounded-xl px-3 py-2 h-12 md:col-span-2" placeholder="Full name" value={newName} onChange={e=>setNewName(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <input className="border rounded-xl px-3 py-2 h-12" placeholder="Jersey #" inputMode="numeric" value={newJersey} onChange={e=>setNewJersey(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <select className="border rounded-xl px-3 py-2 h-12" value={newPos} onChange={e=>setNewPos(e.target.value)} disabled={viewDate!=="LIVE"}>
               <option value="">Position</option><option>PG</option><option>SG</option><option>SF</option><option>PF</option><option>C</option>
             </select>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={newCaptain} onChange={e=>setNewCaptain(e.target.checked)} disabled={viewDate!=="LIVE"}/>Captain</label>
-              <button className="ml-auto h-11 px-5 rounded-xl bg-blue-600 text-white" disabled={viewDate!=="LIVE"}>Add</button>
+              <button className="ml-auto h-12 px-5 rounded-xl bg-blue-600 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>Add</button>
             </div>
           </form>
         </div>
@@ -624,12 +657,7 @@ function League({onLogout}){
             <h3 className="text-lg sm:text-xl font-semibold">Players</h3>
             <div className="flex items-center gap-2">
               <SortDropdown sortMode={sortMode} setSortMode={setSortMode}/>
-              <button
-                className="h-10 px-4 rounded-xl bg-purple-600 text-white disabled:opacity-50"
-                onClick={shuffleAssign}
-                disabled={viewDate!=="LIVE"}
-                title="Randomly distribute unassigned players to existing teams only (max 5 per team)"
-              >
+              <button className="h-10 sm:h-11 px-4 rounded-xl bg-purple-600 text-white disabled:opacity-50 active:scale-[.99]" onClick={shuffleAssign} disabled={viewDate!=="LIVE"} title="Randomly distribute unassigned players to existing teams only (max 5 per team)">
                 Shuffle
               </button>
             </div>
@@ -642,13 +670,13 @@ function League({onLogout}){
               const badge=method==="gcash"?"text-blue-700 bg-blue-100":"text-green-700 bg-green-100";
               return (
                 <li key={stored} className={"rounded px-2 py-1 "+(flash===stored?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
-                  <div className="inline-flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                  <div className="inline-flex w-full flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                     <span className="flex-1 font-medium">
                       <NameWithCaptain name={stored}/>
                       {method && <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${badge}`}>Paid ({method==="cash"?"Cash":"GCash"})</span>}
                     </span>
                     <div className="flex flex-wrap items-center gap-2">
-                      <select className="border rounded-lg px-2 py-2 h-9" value={assigned} onChange={e=>assignTeam(stored,e.target.value)} disabled={viewDate!=="LIVE"}>
+                      <select className="border rounded-lg px-2 py-2 h-10" value={assigned} onChange={e=>assignTeam(stored,e.target.value)} disabled={viewDate!=="LIVE"}>
                         <option value="">No Team</option>
                         {TEAMS.map(t=>{
                           const cnt=(teams[t]?.length||0);
@@ -656,9 +684,9 @@ function League({onLogout}){
                           return <option key={t} value={t} disabled={full}>Team {t}{full?" (Full)":""}</option>;
                         })}
                       </select>
-                      <button onClick={()=>{setPayTarget(stored); setShowPayModal(true);}} className={`h-9 px-3 rounded-lg text-white ${method?"bg-green-700":"bg-green-500"}`} disabled={viewDate!=="LIVE"}>{method?"Change Paid":"Paid"}</button>
-                      <button onClick={()=>openEdit(stored)} className="h-9 px-3 rounded-lg bg-yellow-500 text-white" disabled={viewDate!=="LIVE"}>Edit</button>
-                      <button onClick={()=>{setDeleteTarget(stored); setShowDeleteModal(true);}} className="h-9 px-3 rounded-lg bg-red-500 text-white" disabled={viewDate!=="LIVE"}>Delete</button>
+                      <button onClick={()=>{setPayTarget(stored); setShowPayModal(true);}} className={`h-10 px-3 rounded-lg text-white ${method?"bg-green-700":"bg-green-500"} active:scale-[.99]`} disabled={viewDate!=="LIVE"}>{method?"Change Paid":"Paid"}</button>
+                      <button onClick={()=>openEdit(stored)} className="h-10 px-3 rounded-lg bg-yellow-500 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>Edit</button>
+                      <button onClick={()=>{setDeleteTarget(stored); setShowDeleteModal(true);}} className="h-10 px-3 rounded-lg bg-red-500 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>Delete</button>
                     </div>
                   </div>
                 </li>
@@ -669,17 +697,17 @@ function League({onLogout}){
 
         {/* schedule */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
             <h3 className="text-lg sm:text-xl font-semibold">Game Schedule</h3>
-            <button onClick={clearAllGames} className="h-10 px-4 rounded-xl border text-rose-700 border-rose-300 hover:bg-rose-50" disabled={viewDate!=="LIVE"}>Clear All Games</button>
+            <button onClick={clearAllGames} className="h-10 sm:h-11 px-4 rounded-xl border text-rose-700 border-rose-300 hover:bg-rose-50 active:scale-[.99]" disabled={viewDate!=="LIVE"}>Clear All Games</button>
           </div>
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
-            <input className="border rounded-2xl px-3 py-2 h-11 md:col-span-2" placeholder={`Title (e.g., Game ${games.length+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <select className="border rounded-2xl px-3 py-2 h-11" value={gTeamA} onChange={e=>setGTeamA(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
-            <select className="border rounded-2xl px-3 py-2 h-11" value={gTeamB} onChange={e=>setGTeamB(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
-            <input className="border rounded-2xl px-3 py-2 h-11" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <select className="border rounded-2xl px-3 py-2 h-11" value={gLoc} onChange={e=>setGLoc(e.target.value)} disabled={viewDate!=="LIVE"}><option>Gym 1</option><option>Gym 2</option></select>
-            <button className="h-11 px-5 rounded-2xl bg-blue-600 text-white md:col-span-2" disabled={viewDate!=="LIVE"}>Create Match</button>
+            <input className="border rounded-2xl px-3 py-2 h-12 md:col-span-2" placeholder={`Title (e.g., Game ${games.length+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <select className="border rounded-2xl px-3 py-2 h-12" value={gTeamA} onChange={e=>setGTeamA(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
+            <select className="border rounded-2xl px-3 py-2 h-12" value={gTeamB} onChange={e=>setGTeamB(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
+            <input className="border rounded-2xl px-3 py-2 h-12" type="time" value={gTime} onChange={e=>setGTime(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <select className="border rounded-2xl px-3 py-2 h-12" value={gLoc} onChange={e=>setGLoc(e.target.value)} disabled={viewDate!=="LIVE"}><option>Gym 1</option><option>Gym 2</option></select>
+            <button className="h-12 px-5 rounded-2xl bg-blue-600 text-white md:col-span-2 active:scale-[.99]" disabled={viewDate!=="LIVE"}>Create Match</button>
           </form>
 
           <div className="space-y-3">
@@ -694,11 +722,13 @@ function League({onLogout}){
                       <span className="ml-3">{fmtMDY(g.gdate)}{g.gtime?` ${g.gtime}`:""}</span>
                       {g.location?<span className="ml-3">• {g.location}</span>:null}
                     </div>
-                    <div className="hidden sm:flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
                       <span className={`px-2 py-1 rounded text-xs ${w.startsWith("Team")?"bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>Winner: {w}</span>
-                      <button className="h-9 px-3 rounded-lg bg-yellow-500 text-white" onClick={()=>requestEditGame(g)} disabled={viewDate!=="LIVE"}>Edit</button>
-                      <button className="h-9 px-3 rounded-lg bg-red-500 text-white" onClick={()=>deleteGame(g.id)} disabled={viewDate!=="LIVE"}>Delete</button>
+                      <div className="flex gap-2">
+                        <button className="h-10 px-3 rounded-lg bg-yellow-500 text-white active:scale-[.99]" onClick={()=>requestEditGame(g)} disabled={viewDate!=="LIVE"}>Edit</button>
+                        <button className="h-10 px-3 rounded-lg bg-red-500 text-white active:scale-[.99]" onClick={()=>deleteGame(g.id)} disabled={viewDate!=="LIVE"}>Delete</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -722,7 +752,7 @@ function League({onLogout}){
                     <li key={n} className="flex items-center gap-2">
                       <span className="font-medium w-6 text-right">{i+1}.</span>
                       <span className="flex-1"><NameWithCaptain name={n}/></span>
-                      <button onClick={()=>assignTeam(n,"")} className="h-9 px-3 rounded-lg bg-red-500 text-white" disabled={viewDate!=="LIVE"}>Remove</button>
+                      <button onClick={()=>assignTeam(n,"")} className="h-10 px-3 rounded-lg bg-red-500 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>Remove</button>
                     </li>
                   ) : <li className="text-gray-400">No players</li>}
                 </ul>
@@ -733,8 +763,8 @@ function League({onLogout}){
 
         {/* footer */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-6">
-          <button onClick={()=>setShowClearModal(true)} className="h-10 px-5 rounded-xl border text-red-700 border-red-300 hover:bg-red-50" disabled={viewDate!=="LIVE"}>Clear All Players</button>
-          <button onClick={()=>setShowLogoutModal(true)} className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white">Logout</button>
+          <button onClick={()=>setShowClearModal(true)} className="h-11 px-5 rounded-xl border text-red-700 border-red-300 hover:bg-red-50 active:scale-[.99]" disabled={viewDate!=="LIVE"}>Clear All Players</button>
+          <button onClick={()=>setShowLogoutModal(true)} className="h-11 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white active:scale-[.99]">Logout</button>
         </div>
       </div>
 
@@ -744,8 +774,8 @@ function League({onLogout}){
           <h4 className="text-lg font-semibold mb-2">Delete player?</h4>
           <p className="text-sm text-gray-600 mb-4">Remove <span className="font-medium">{deleteTarget}</span>.</p>
           <div className="flex justify-end gap-2">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>{setShowDeleteModal(false); setDeleteTarget(null);}}>Cancel</button>
-            <button className="h-10 px-4 rounded-lg bg-red-600 text-white" onClick={deletePlayer} disabled={viewDate!=="LIVE"}>Delete</button>
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>{setShowDeleteModal(false); setDeleteTarget(null);}}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg bg-red-600 text-white active:scale-[.99]" onClick={deletePlayer} disabled={viewDate!=="LIVE"}>Delete</button>
           </div>
         </Modal>
       )}
@@ -754,19 +784,19 @@ function League({onLogout}){
           <h4 className="text-lg font-semibold mb-3">Set Payment for</h4>
           <div className="mb-4 font-medium">{payTarget}</div>
           <div className="grid gap-2">
-            <button onClick={()=>setPayment(payTarget,"cash")} className="h-11 rounded-lg bg-green-600 text-white" disabled={viewDate!=="LIVE"}>Cash</button>
-            <button onClick={()=>setPayment(payTarget,"gcash")} className="h-11 rounded-lg bg-sky-600 text-white" disabled={viewDate!=="LIVE"}>GCash</button>
-            <button onClick={()=>setPayment(payTarget,null)} className="h-11 rounded-lg border" disabled={viewDate!=="LIVE"}>Clear / Unpaid</button>
+            <button onClick={()=>setPayment(payTarget,"cash")} className="h-12 rounded-lg bg-green-600 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>Cash</button>
+            <button onClick={()=>setPayment(payTarget,"gcash")} className="h-12 rounded-lg bg-sky-600 text-white active:scale-[.99]" disabled={viewDate!=="LIVE"}>GCash</button>
+            <button onClick={()=>setPayment(payTarget,null)} className="h-12 rounded-lg border active:scale-[.99]" disabled={viewDate!=="LIVE"}>Clear / Unpaid</button>
           </div>
-          <div className="text-right mt-3"><button className="h-9 px-3 rounded-lg border" onClick={()=>{setShowPayModal(false); setPayTarget(null);}}>Close</button></div>
+          <div className="text-right mt-3"><button className="h-10 px-3 rounded-lg border" onClick={()=>{setShowPayModal(false); setPayTarget(null);}}>Close</button></div>
         </Modal>
       )}
       {showClearModal && (
         <Modal onClose={()=>setShowClearModal(false)}>
           <h4 className="text-lg font-semibold mb-3">Clear ALL registered players?</h4>
           <div className="flex justify-end gap-2">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>setShowClearModal(false)}>Cancel</button>
-            <button className="h-10 px-4 rounded-lg bg-red-600 text-white" onClick={()=>{
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>setShowClearModal(false)}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg bg-red-600 text-white active:scale-[.99]" onClick={()=>{
               if(SB && viewDate==="LIVE") sbDeleteAllPlayers().catch(e=>{setConn("local"); setConnErr(String(e?.message||e));});
               setIndividuals([]); setAddedSeq([]); setTeams(EMPTY_TEAMS); setPaid({});
               setShowClearModal(false);
@@ -778,8 +808,8 @@ function League({onLogout}){
         <Modal onClose={()=>setShowLogoutModal(false)}>
           <h4 className="text-lg font-semibold mb-3">Log out?</h4>
           <div className="flex justify-end gap-2">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>setShowLogoutModal(false)}>Cancel</button>
-            <button className="h-10 px-4 rounded-lg bg-rose-600 text-white" onClick={onLogout}>Logout</button>
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>setShowLogoutModal(false)}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg bg-rose-600 text-white active:scale-[.99]" onClick={onLogout}>Logout</button>
           </div>
         </Modal>
       )}
@@ -787,14 +817,14 @@ function League({onLogout}){
         <Modal onClose={()=>{setShowEditModal(false); setEditTarget(null);}}>
           <h4 className="text-lg font-semibold mb-3">Edit Player</h4>
           <div className="grid gap-3">
-            <input className="border rounded-lg px-3 py-2 h-11" placeholder="Full name" value={editBase} onChange={e=>setEditBase(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <input className="border rounded-lg px-3 py-2 h-11" placeholder="Jersey #" value={editJersey} onChange={e=>setEditJersey(e.target.value)} disabled={viewDate!=="LIVE"}/>
-            <select className="border rounded-lg px-3 py-2 h-11" value={editPos} onChange={e=>setEditPos(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">Position</option><option>PG</option><option>SG</option><option>SF</option><option>PF</option><option>C</option></select>
+            <input className="border rounded-lg px-3 py-2 h-12" placeholder="Full name" value={editBase} onChange={e=>setEditBase(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <input className="border rounded-lg px-3 py-2 h-12" placeholder="Jersey #" value={editJersey} onChange={e=>setEditJersey(e.target.value)} disabled={viewDate!=="LIVE"}/>
+            <select className="border rounded-lg px-3 py-2 h-12" value={editPos} onChange={e=>setEditPos(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">Position</option><option>PG</option><option>SG</option><option>SF</option><option>PF</option><option>C</option></select>
             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={editCaptain} onChange={e=>setEditCaptain(e.target.checked)} disabled={viewDate!=="LIVE"}/>Captain</label>
           </div>
           <div className="flex justify-end gap-2 mt-4">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>{setShowEditModal(false); setEditTarget(null);}}>Cancel</button>
-            <button className="h-10 px-4 rounded-lg bg-blue-600 text-white" onClick={saveEdit} disabled={viewDate!=="LIVE"}>Save</button>
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>{setShowEditModal(false); setEditTarget(null);}}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg bg-blue-600 text-white active:scale-[.99]" onClick={saveEdit} disabled={viewDate!=="LIVE"}>Save</button>
           </div>
         </Modal>
       )}
@@ -805,25 +835,25 @@ function League({onLogout}){
             <fieldset className="border rounded-xl p-4">
               <legend className="px-1 text-sm font-semibold text-gray-700">Game Details</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input className="border rounded-lg px-3 py-2 h-11" placeholder="Title" value={editGame.title||""} onChange={e=>setEditGame({...editGame,title:e.target.value})} disabled={viewDate!=="LIVE"}/>
-                <input className="border rounded-lg px-3 py-2 h-11" type="date" value={editGame.gdate||""} onChange={e=>setEditGame({...editGame,gdate:e.target.value})} disabled={viewDate!=="LIVE"}/>
-                <input className="border rounded-lg px-3 py-2 h-11" type="time" value={editGame.gtime||""} onChange={e=>setEditGame({...editGame,gtime:e.target.value})} disabled={viewDate!=="LIVE"}/>
-                <select className="border rounded-lg px-3 py-2 h-11" value={editGame.location||"Gym 1"} onChange={e=>setEditGame({...editGame,location:e.target.value})} disabled={viewDate!=="LIVE"}><option>Gym 1</option><option>Gym 2</option></select>
+                <input className="border rounded-lg px-3 py-2 h-12" placeholder="Title" value={editGame.title||""} onChange={e=>setEditGame({...editGame,title:e.target.value})} disabled={viewDate!=="LIVE"}/>
+                <input className="border rounded-lg px-3 py-2 h-12" type="date" value={editGame.gdate||""} onChange={e=>setEditGame({...editGame,gdate:e.target.value})} disabled={viewDate!=="LIVE"}/>
+                <input className="border rounded-lg px-3 py-2 h-12" type="time" value={editGame.gtime||""} onChange={e=>setEditGame({...editGame,gtime:e.target.value})} disabled={viewDate!=="LIVE"}/>
+                <select className="border rounded-lg px-3 py-2 h-12" value={editGame.location||"Gym 1"} onChange={e=>setEditGame({...editGame,location:e.target.value})} disabled={viewDate!=="LIVE"}><option>Gym 1</option><option>Gym 2</option></select>
               </div>
             </fieldset>
             <fieldset className="border rounded-xl p-4">
               <legend className="px-1 text-sm font-semibold text-gray-700">Teams &amp; Scores</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <select className="border rounded-lg px-3 py-2 h-11" value={editGame.team_a||""} onChange={e=>setEditGame({...editGame,team_a:e.target.value})} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
-                <select className="border rounded-lg px-3 py-2 h-11" value={editGame.team_b||""} onChange={e=>setEditGame({...editGame,team_b:e.target.value})} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
-                <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" value={editGame.score_a??0} onChange={e=>setEditGame({...editGame,score_a:e.target.value})} disabled={viewDate!=="LIVE"}/>
-                <input className="border rounded-lg px-3 py-2 h-11" type="number" min="0" value={editGame.score_b??0} onChange={e=>setEditGame({...editGame,score_b:e.target.value})} disabled={viewDate!=="LIVE"}/>
+                <select className="border rounded-lg px-3 py-2 h-12" value={editGame.team_a||""} onChange={e=>setEditGame({...editGame,team_a:e.target.value})} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
+                <select className="border rounded-lg px-3 py-2 h-12" value={editGame.team_b||""} onChange={e=>setEditGame({...editGame,team_b:e.target.value})} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
+                <input className="border rounded-lg px-3 py-2 h-12" type="number" min="0" value={editGame.score_a??0} onChange={e=>setEditGame({...editGame,score_a:e.target.value})} disabled={viewDate!=="LIVE"}/>
+                <input className="border rounded-lg px-3 py-2 h-12" type="number" min="0" value={editGame.score_b??0} onChange={e=>setEditGame({...editGame,score_b:e.target.value})} disabled={viewDate!=="LIVE"}/>
               </div>
             </fieldset>
           </div>
           <div className="flex justify-end gap-2 mt-5">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>{setShowGameEditModal(false); setEditGame(null);}}>Cancel</button>
-            <button className="h-10 px-4 rounded-lg bg-blue-600 text-white" onClick={saveGameEdit} disabled={viewDate!=="LIVE"}>Save</button>
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>{setShowGameEditModal(false); setEditGame(null);}}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg bg-blue-600 text-white active:scale-[.99]" onClick={saveGameEdit} disabled={viewDate!=="LIVE"}>Save</button>
           </div>
         </Modal>
       )}
@@ -832,31 +862,25 @@ function League({onLogout}){
           <h4 className="text-lg font-semibold mb-3">Delete a Saved Log</h4>
           <p className="text-sm text-gray-600 mb-3">Choose which date to delete from the log archive.</p>
           <div className="grid gap-3">
-            <select
-              className="border rounded-lg h-11 px-3"
-              value={deleteLogDate}
-              onChange={(e)=>setDeleteLogDate(e.target.value)}
-            >
+            <select className="border rounded-lg h-12 px-3" value={deleteLogDate} onChange={(e)=>setDeleteLogDate(e.target.value)}>
               {logDates.length===0 && <option value="">(No logs)</option>}
               {logDates.map(d=><option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div className="flex justify-end gap-2 mt-4">
-            <button className="h-10 px-4 rounded-lg border" onClick={()=>setShowDeleteLogModal(false)}>Cancel</button>
+            <button className="h-11 px-4 rounded-lg border" onClick={()=>setShowDeleteLogModal(false)}>Cancel</button>
             <button
-              className="h-10 px-4 rounded-lg bg-red-600 text-white disabled:opacity-50"
+              className="h-11 px-4 rounded-lg bg-red-600 text-white disabled:opacity-50 active:scale-[.99]"
               disabled={!deleteLogDate}
               onClick={async ()=>{
                 const target=deleteLogDate;
                 const ok = await sbDeleteLog(target);
                 if(ok){
-                  // if current view is the deleted date, bounce back to LIVE
                   if(viewDate===target){
                     setViewDate("LIVE");
                     const snap=getLocal(); if(snap) applyPayload(snap);
                   }
                   await refreshAdminDates();
-                  // notify local tabs / public watcher (optional bump)
                   try { localStorage.setItem(LS_LOGS_BUMP, String(Date.now())); } catch {}
                   alert(`Deleted log: ${target}`);
                 }else{
@@ -881,13 +905,13 @@ function SortDropdown({sortMode,setSortMode}){
   useEffect(()=>{const h=(e)=>{if(ref.current && !ref.current.contains(e.target)) setOpen(false)}; document.addEventListener("click",h); return ()=>document.removeEventListener("click",h);},[]);
   return (
     <div className="relative" ref={ref}>
-      <button onClick={()=>setOpen(v=>!v)} className="inline-flex items-center gap-2 px-3 h-10 rounded-xl border bg-white hover:bg-slate-50">
+      <button onClick={()=>setOpen(v=>!v)} className="inline-flex items-center gap-2 px-3 h-10 sm:h-11 rounded-xl border bg-white hover:bg-slate-50 active:scale-[.99]">
         {sortMode==="alpha"?"Alphabetical (A–Z)":"Most Recent"} ▾
       </button>
       {open && (
         <div className="absolute right-0 mt-2 w-56 rounded-2xl border bg-white shadow-lg z-10">
-          <button className={`block w-full text-left px-4 py-2 hover:bg-slate-50 ${sortMode==="recent"?"font-semibold":""}`} onClick={()=>{setSortMode("recent"); setOpen(false);}}>Most Recent (newest at bottom)</button>
-          <button className={`block w-full text-left px-4 py-2 hover:bg-slate-50 ${sortMode==="alpha"?"font-semibold":""}`} onClick={()=>{setSortMode("alpha"); setOpen(false);}}>Alphabetical (A–Z)</button>
+          <button className={`block w-full text-left px-4 py-3 hover:bg-slate-50 ${sortMode==="recent"?"font-semibold":""}`} onClick={()=>{setSortMode("recent"); setOpen(false);}}>Most Recent (newest at bottom)</button>
+          <button className={`block w-full text-left px-4 py-3 hover:bg-slate-50 ${sortMode==="alpha"?"font-semibold":""}`} onClick={()=>{setSortMode("alpha"); setOpen(false);}}>Alphabetical (A–Z)</button>
         </div>
       )}
     </div>
@@ -897,10 +921,25 @@ function SortDropdown({sortMode,setSortMode}){
 /* ============================== Public View ============================== */
 function FitToPage({designWidth=1280,children}){
   const [scale,setScale]=useState(1);
-  const recompute=useCallback(()=>{const vw=Math.max(document.documentElement.clientWidth,window.innerWidth||0); setScale(Math.min(1,vw/designWidth));},[designWidth]);
-  useEffect(()=>{recompute(); const r=()=>recompute(); window.addEventListener("resize",r,{passive:true}); window.addEventListener("orientationchange",r,{passive:true}); return()=>{window.removeEventListener("resize",r); window.removeEventListener("orientationchange",r);};},[recompute]);
-  return (<div className="w-screen min-h-screen bg-slate-50 overflow-x-hidden" style={{WebkitTextSizeAdjust:"100%"}}><div className="mx-auto" style={{width:designWidth,transform:`scale(${scale})`,transformOrigin:"top left"}}>{children}</div><div style={{height:`${(1-scale)*100}vh`}}/></div>);
+  const recompute=useCallback(()=>{
+    const vw=Math.max(document.documentElement.clientWidth,window.innerWidth||0);
+    setScale(Math.min(1,vw/designWidth));
+  },[designWidth]);
+  useEffect(()=>{
+    recompute();
+    const r=()=>recompute();
+    window.addEventListener("resize",r,{passive:true});
+    window.addEventListener("orientationchange",r,{passive:true});
+    return()=>{window.removeEventListener("resize",r); window.removeEventListener("orientationchange",r);};
+  },[recompute]);
+  return (
+    <div className="w-screen min-h-[100dvh] bg-slate-50 overflow-x-hidden" style={{WebkitTextSizeAdjust:"100%"}}>
+      <div className="mx-auto" style={{width:designWidth,transform:`scale(${scale})`,transformOrigin:"top left"}}>{children}</div>
+      <div style={{height:`${(1-scale)*100}vh`}}/>
+    </div>
+  );
 }
+
 function PublicBoard(){
   const [loading,setLoading]=useState(true),[err,setErr]=useState("");
   const [payload,setPayload]=useState(null);
@@ -995,7 +1034,7 @@ function PublicBoard(){
           {logDates.length>0 && (
             <div className="flex items-center gap-2">
               <span className="text-sm">Log:</span>
-              <select className="border rounded-xl h-9 px-3" value={viewDate} onChange={e=>loadView(e.target.value)}>
+              <select className="border rounded-xl h-10 px-3" value={viewDate} onChange={e=>loadView(e.target.value)}>
                 <option value="LIVE">LIVE (current)</option>
                 {logDates.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
@@ -1015,7 +1054,7 @@ function PublicBoard(){
                 const w=winnerLabel(g);
                 return (
                   <div key={g.id||idx} className="border rounded-2xl p-4">
-                    <div className="flex flex-row items-center gap-3 mb-2">
+                    <div className="flex flex-col md:flex-row md:items-center gap-2 mb-2">
                       <div className="font-semibold min-w-24">{g.title||`Game ${idx+1}`}</div>
                       <div className="text-sm text-gray-700 flex-1">
                         {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
@@ -1024,7 +1063,7 @@ function PublicBoard(){
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
-                        <span className={`px-2 py-1 rounded text-xs ${winnerLabel(g).startsWith("Team")?"bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>Winner: {winnerLabel(g)}</span>
+                        <span className={`px-2 py-1 rounded text-xs ${w.startsWith("Team")?"bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>Winner: {w}</span>
                       </div>
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1072,28 +1111,42 @@ function PublicBoard(){
               </div>
             </div>}
         </div>
-
-        <div className="mt-6 text-center text-sm text-gray-500">Public view</div>
       </div>
     </div>
   );
-  return <FitToPage designWidth={1280}>{content}</FitToPage>;
+
+  return /iphone|android|mobile/i.test(navigator.userAgent)
+    ? content
+    : <FitToPage designWidth={1280}>{content}</FitToPage>;
 }
 
-/* =============================== Modal ================================= */
+/* ------------------------------ Modal ------------------------------ */
 function Modal({children,onClose}){
+  useEffect(()=>{
+    const onKey=(e)=>{ if(e.key==="Escape") onClose?.(); };
+    document.addEventListener("keydown", onKey);
+    return ()=>document.removeEventListener("keydown", onKey);
+  },[onClose]);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center">
+    <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/40" onClick={onClose}/>
-      <div className="relative bg-white rounded-2xl shadow-xl p-6 w-[92%] max-w-2xl">{children}</div>
+      <div className="absolute inset-x-0 bottom-0 sm:inset-0 sm:flex sm:items-center sm:justify-center p-3 sm:p-4">
+        <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg p-4 sm:p-6">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
 
-/* ================================= App ================================= */
+/* ------------------------------ App root ------------------------------ */
 export default function App(){
-  const isPublic=typeof window!=="undefined"&&new URLSearchParams(window.location.search).get("public")==="1";
   const {user,login,logout}=useAuth();
+  const isPublic = new URLSearchParams(location.search).get("public")==="1";
+
   if(isPublic) return <PublicBoard/>;
-  return user?<League onLogout={logout}/>:<Login onLogin={login}/>;
+
+  if(!user) return <Login onLogin={login}/>;
+
+  return <League onLogout={logout}/>;
 }
