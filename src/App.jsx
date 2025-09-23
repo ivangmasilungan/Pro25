@@ -45,7 +45,7 @@ const fmtMDY = (iso) => {
 /* name helpers */
 function parseStoredName(raw){
   const s=String(raw||"");
-  const m=s.match(/^(.*?)(\s*\((.*)\))\s*$/);
+  const m=s.match(/^(.*?)(\\s*\\((.*)\\))\\s*$/);
   const baseWithJersey=(m?m[1]:s).trim();
   const insideRaw=m?(m[3]||""):"";
   const tokens=insideRaw.split(",").map(t=>t.trim()).filter(Boolean);
@@ -360,7 +360,7 @@ function League({onLogout}){
   const openEdit=(stored)=>{
     setEditTarget(stored);
     const {baseWithJersey,isCaptain,otherTags}=parseStoredName(stored);
-    const m=baseWithJersey.match(/^(.*?)(?:\s*#(\d+))?$/);
+    const m=baseWithJersey.match(/^(.*?)(?:\\s*#(\\d+))?$/);
     setEditBase((m?.[1]||"").trim()); setEditJersey((m?.[2]||"").trim());
     setEditPos((otherTags.find(t=>POS_RE.test(t))||"").toUpperCase()); setEditCaptain(!!isCaptain);
     setShowEditModal(true);
@@ -663,14 +663,14 @@ function League({onLogout}){
             </div>
           </div>
 
-          <ol className="space-y-2 list-decimal list-inside">
+          <ol className="list-decimal pl-5 sm:pl-6 space-y-2">
             {sortedIndividuals.map(stored=>{
               const assigned=Object.keys(teams).find(t=>teams[t].includes(stored))||"";
               const method=paid[stored];
               const badge=method==="gcash"?"text-blue-700 bg-blue-100":"text-green-700 bg-green-100";
               return (
                 <li key={stored} className={"rounded px-2 py-1 "+(flash===stored?"bg-yellow-50 ring-1 ring-yellow-200":"")}>
-                  <div className="inline-flex w-full flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                  <div className="flex w-full flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                     <span className="flex-1 font-medium">
                       <NameWithCaptain name={stored}/>
                       {method && <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${badge}`}>Paid ({method==="cash"?"Cash":"GCash"})</span>}
@@ -1100,16 +1100,29 @@ function PublicBoard(){
 
         <div className="bg-white rounded-2xl shadow-sm border p-5">
           <h3 className="text-lg sm:text-xl font-semibold mb-3">Players</h3>
-          {players.length===0?<div className="text-gray-500 text-sm">No registered players.</div>:
-            <div className="overflow-x-auto">
-              <div className="grid grid-flow-col auto-cols-max gap-8">
-                {chunk(players,10).map((col,idx)=>(
-                  <ol key={idx} start={idx*10+1} className="list-decimal pl-6 space-y-1 min-w-[220px]">
-                    {col.map((n,i)=><li key={`${n}-${i}`} className="text-sm"><NameWithCaptain name={n}/></li>)}
-                  </ol>
+          {players.length===0 ? (
+            <div className="text-gray-500 text-sm">No registered players.</div>
+          ) : (
+            <>
+              {/* Mobile: simple single ordered list */}
+              <ol className="md:hidden list-decimal pl-5 space-y-1">
+                {players.map((n,i)=>(
+                  <li key={`${n}-${i}`} className="text-sm"><NameWithCaptain name={n}/></li>
                 ))}
+              </ol>
+
+              {/* Desktop/Tablet: multi-column list */}
+              <div className="hidden md:block overflow-x-auto">
+                <div className="grid grid-flow-col auto-cols-max gap-8">
+                  {chunk(players,10).map((col,idx)=>(
+                    <ol key={idx} start={idx*10+1} className="list-decimal pl-6 space-y-1 min-w-[220px]">
+                      {col.map((n,i)=><li key={`${n}-${i}`} className="text-sm"><NameWithCaptain name={n}/></li>)}
+                    </ol>
+                  ))}
+                </div>
               </div>
-            </div>}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1146,7 +1159,7 @@ export default function App(){
 
   if(isPublic) return <PublicBoard/>;
 
-  if(!user) return <Login onLogin={login}/>;
+  if(!user) return <Login onLogin={login}/>
 
   return <League onLogout={logout}/>;
 }
