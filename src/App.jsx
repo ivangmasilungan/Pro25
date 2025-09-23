@@ -32,7 +32,7 @@ const normTeam=(v)=>{const x=(v??"").trim(); return x?x:null;};
 const nextScore=(prev,type,d)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(d||0)) });
 const todayISO = () => new Date().toISOString().slice(0,10);
 const monthName = (i)=>["January","February","March","April","May","June","July","August","September","October","November","December"][i];
-const fmtMDY = (iso) => {
+const fmtMDY = (iso) => { // kept for compatibility; date is not shown in UI now
   if(!iso) return "No date";
   const d = new Date(iso+"T00:00:00");
   if(Number.isNaN(+d)) return "No date";
@@ -45,7 +45,7 @@ const fmtMDY = (iso) => {
 /* name helpers */
 function parseStoredName(raw){
   const s=String(raw||"");
-  const m=s.match(/^(.*?)(\\s*\\((.*)\\))\\s*$/);
+  const m=s.match(/^(.*?)(\s*\((.*)\))\s*$/);
   const baseWithJersey=(m?m[1]:s).trim();
   const insideRaw=m?(m[3]||""):"";
   const tokens=insideRaw.split(",").map(t=>t.trim()).filter(Boolean);
@@ -321,7 +321,7 @@ function League({onLogout}){
       title: g.title || "",
       team_a: g.team_a || "",
       team_b: g.team_b || "",
-      gdate: g.gdate || "",
+      gdate: g.gdate || "", // retained in state; not shown
       gtime: g.gtime || "",
       location: g.location || "",
       score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
@@ -360,7 +360,7 @@ function League({onLogout}){
   const openEdit=(stored)=>{
     setEditTarget(stored);
     const {baseWithJersey,isCaptain,otherTags}=parseStoredName(stored);
-    const m=baseWithJersey.match(/^(.*?)(?:\\s*#(\\d+))?$/);
+    const m=baseWithJersey.match(/^(.*?)(?:\s*#(\d+))?$/);
     setEditBase((m?.[1]||"").trim()); setEditJersey((m?.[2]||"").trim());
     setEditPos((otherTags.find(t=>POS_RE.test(t))||"").toUpperCase()); setEditCaptain(!!isCaptain);
     setShowEditModal(true);
@@ -697,10 +697,13 @@ function League({onLogout}){
 
         {/* schedule */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-            <h3 className="text-lg sm:text-xl font-semibold">Game Schedule</h3>
-            <button onClick={clearAllGames} className="h-10 sm:h-11 px-4 rounded-xl border text-rose-700 border-rose-300 hover:bg-rose-50 active:scale-[.99]" disabled={viewDate!=="LIVE"}>Clear All Games</button>
-          </div>
+          {/* Title restyled: white text, maroon background, bold */}
+          <h3 className="mb-3 inline-block font-bold text-white bg-[#800000] px-3 py-1 rounded">
+            Game Schedule
+          </h3>
+
+          <div className="flex justify-end -mt-2 mb-1">{/* spacer to keep layout similar */}</div>
+
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
             <input className="border rounded-2xl px-3 py-2 h-12 md:col-span-2" placeholder={`Title (e.g., Game ${games.length+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} disabled={viewDate!=="LIVE"}/>
             <select className="border rounded-2xl px-3 py-2 h-12" value={gTeamA} onChange={e=>setGTeamA(e.target.value)} disabled={viewDate!=="LIVE"}><option value="">-------</option>{TEAMS.map(t=><option key={t} value={t}>Team {t}</option>)}</select>
@@ -719,7 +722,8 @@ function League({onLogout}){
                     <div className="font-semibold min-w-24">{g.title||`Game ${idx+1}`}</div>
                     <div className="text-sm text-gray-700 flex-1">
                       {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
-                      <span className="ml-3">{fmtMDY(g.gdate)}{g.gtime?` ${g.gtime}`:""}</span>
+                      {/* Show TIME only (date removed) */}
+                      {g.gtime && <span className="ml-3">{g.gtime}</span>}
                       {g.location?<span className="ml-3">• {g.location}</span>:null}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -1045,7 +1049,11 @@ function PublicBoard(){
         {!loading && err && <div className="mb-4 text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2">{err}</div>}
 
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          <h3 className="text-lg sm:text-xl font-semibold mb-3">Game Schedule</h3>
+          {/* Title restyled: white text, maroon background, bold */}
+          <h3 className="mb-3 inline-block font-bold text-white bg-[#800000] px-3 py-1 rounded">
+            Game Schedule
+          </h3>
+
           {games.length===0?<div className="text-gray-500 text-sm">No games scheduled.</div>:
             <div className="space-y-3">
               {games.map((g,idx)=>{
@@ -1058,7 +1066,8 @@ function PublicBoard(){
                       <div className="font-semibold min-w-24">{g.title||`Game ${idx+1}`}</div>
                       <div className="text-sm text-gray-700 flex-1">
                         {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
-                        <span className="ml-3">{fmtMDY(g.gdate)}{g.gtime?` ${g.gtime}`:""}</span>
+                        {/* TIME only (date removed) */}
+                        {g.gtime && <span className="ml-3">{g.gtime}</span>}
                         {g.location && <span className="ml-3">• {g.location}</span>}
                       </div>
                       <div className="flex items-center gap-2">
@@ -1116,8 +1125,7 @@ function PublicBoard(){
                 <div className="grid grid-flow-col auto-cols-max gap-8">
                   {chunk(players,10).map((col,idx)=>(
                     <ol key={idx} start={idx*10+1} className="list-decimal pl-6 space-y-1 min-w-[220px]">
-                      {col.map((n,i)=><li key={`${n}-${i}`} className="text-sm"><NameWithCaptain name={n}/></li>)}
-                    </ol>
+                      {col.map((n,i)=><li key={`${n}-${i}`} className="text-sm"><NameWithCaptain name={n}/></li>)}</ol>
                   ))}
                 </div>
               </div>
