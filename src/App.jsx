@@ -4,25 +4,21 @@ import { supabase as SB } from "./lib/supabase";
 
 /* ============================= constants/utils ============================= */
 const TEAMS = ["A","B","C","D","E","F","G","H","I","J"];
-const TEAM_CAP = 5; // max players per team
+const TEAM_CAP = 5;
 const EMPTY_TEAMS = TEAMS.reduce((a,t)=>{a[t]=[];return a;}, {});
 const LS_KEY        = "paml:v49";
 const LS_LOGS       = "paml_logs:v1";
 const LS_LOGS_BUMP  = "paml_logs_bump:v1";
 
 const getLocal = () => {
-  try {
-    const s = localStorage.getItem(LS_KEY);
-    return s ? JSON.parse(s) : null;
-  } catch { return null; }
+  try { const s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : null; }
+  catch { return null; }
 };
 const setLocal = (x) => { try { localStorage.setItem(LS_KEY, JSON.stringify(x)); } catch {} };
 
 const getLocalLogs = () => {
-  try {
-    const s = localStorage.getItem(LS_LOGS);
-    return s ? JSON.parse(s) : {};
-  } catch { return {}; }
+  try { const s = localStorage.getItem(LS_LOGS); return s ? JSON.parse(s) : {}; }
+  catch { return {}; }
 };
 const setLocalLogs = (obj) => { try { localStorage.setItem(LS_LOGS, JSON.stringify(obj)); } catch {} };
 
@@ -31,16 +27,6 @@ const CAP_RE=/^(CAPTAIN|CAP)$/i;
 const normTeam=(v)=>{const x=(v??"").trim(); return x?x:null;};
 const nextScore=(prev,type,d)=>({ ...prev, [type]: Math.max(0, Number(prev?.[type]??0)+Number(d||0)) });
 const todayISO = () => new Date().toISOString().slice(0,10);
-const monthName = (i)=>["January","February","March","April","May","June","July","August","September","October","November","December"][i];
-const fmtMDY = (iso) => { // kept for compatibility; date is not shown in UI now
-  if(!iso) return "No date";
-  const d = new Date(iso+"T00:00:00");
-  if(Number.isNaN(+d)) return "No date";
-  const m = monthName(d.getMonth());
-  const dd = String(d.getDate()).padStart(2,"0");
-  const yyyy = d.getFullYear();
-  return `${m}/${dd}/${yyyy}`;
-};
 
 /* name helpers */
 function parseStoredName(raw){
@@ -86,7 +72,10 @@ function getOutcome(g){
   if(a>b) return {type:"decided",winner:ta,loser:tb};
   return {type:"decided",winner:tb,loser:ta};
 }
-const winnerLabel=(g)=>{const o=getOutcome(g); if(o.type==="decided") return `Team ${o.winner}`; if(o.type==="tie") return "Tie"; return "TBD";};
+const hasFinalWinner = (g) => {
+  const a=Number(g?.score_a??0), b=Number(g?.score_b??0);
+  return g?.team_a && g?.team_b && a!==b && (a>0 || b>0);
+};
 
 /* ================================ Supabase ================================ */
 async function sbFetchAll(){
@@ -236,17 +225,23 @@ function League({onLogout}){
   const [editTarget,setEditTarget]=useState(null),[editBase,setEditBase]=useState(""),[editJersey,setEditJersey]=useState(""),[editPos,setEditPos]=useState(""),[editCaptain,setEditCaptain]=useState(false);
   const [showGameEditModal,setShowGameEditModal]=useState(false); const [editGame,setEditGame]=useState(null);
 
-  // NEW: delete-one-log modal
+  // delete-one-log modal
   const [showDeleteLogModal,setShowDeleteLogModal]=useState(false);
   const [deleteLogDate,setDeleteLogDate]=useState("");
 
   // add form
   const [newName,setNewName]=useState(""),[newJersey,setNewJersey]=useState(""),[newPos,setNewPos]=useState(""),[newCaptain,setNewCaptain]=useState(false);
 
-  const makePayload=()=>({
-    individuals, addedSeq, teams, paid, scores, games, sortMode,
-    meta:{ saved_at:new Date().toISOString() }
-  });
+  const makePayload = () => ({
+  individuals,
+  addedSeq,
+  teams,
+  paid,
+  scores,
+  games,
+  sortMode,
+  meta: { saved_at: new Date().toISOString() },
+});
   const applyPayload=(p)=>{
     setIndividuals(p.individuals||[]);
     setAddedSeq((p.addedSeq||[]).filter(n=>(p.individuals||[]).includes(n)));
@@ -321,7 +316,7 @@ function League({onLogout}){
       title: g.title || "",
       team_a: g.team_a || "",
       team_b: g.team_b || "",
-      gdate: g.gdate || "", // retained in state; not shown
+      gdate: g.gdate || "", // kept in state; not shown
       gtime: g.gtime || "",
       location: g.location || "",
       score_a: Number.isFinite(g.score_a) ? g.score_a : 0,
@@ -697,12 +692,10 @@ function League({onLogout}){
 
         {/* schedule */}
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          {/* Title restyled: white text, maroon background, bold */}
+          {/* Title: white text, maroon background, bold */}
           <h3 className="mb-3 inline-block font-bold text-white bg-[#800000] px-3 py-1 rounded">
             Game Schedule
           </h3>
-
-          <div className="flex justify-end -mt-2 mb-1">{/* spacer to keep layout similar */}</div>
 
           <form onSubmit={addGame} className="grid grid-cols-1 md:grid-cols-8 gap-2 md:gap-3 mb-4">
             <input className="border rounded-2xl px-3 py-2 h-12 md:col-span-2" placeholder={`Title (e.g., Game ${games.length+1})`} value={gTitle} onChange={e=>setGTitle(e.target.value)} disabled={viewDate!=="LIVE"}/>
@@ -715,20 +708,29 @@ function League({onLogout}){
 
           <div className="space-y-3">
             {games.length===0 ? <div className="text-gray-500 text-sm">No games yet. Create one above.</div> : games.map((g,idx)=>{
-              const a=g.team_a?.trim(), b=g.team_b?.trim(); const w=winnerLabel(g);
+              const a=g.team_a?.trim(), b=g.team_b?.trim();
+              const decided = hasFinalWinner(g);
+              const outcome = decided ? getOutcome(g) : null;
               return (
                 <div key={g.id} className="border rounded-2xl p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
-                    <div className="font-semibold min-w-24">{g.title||`Game ${idx+1}`}</div>
+                    {/* One-liner: Game N (Team A vs Team B) TIME • LOCATION */}
                     <div className="text-sm text-gray-700 flex-1">
-                      {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
-                      {/* Show TIME only (date removed) */}
+                      <span className="font-semibold">{g.title||`Game ${idx+1}`}</span>
+                      <span className="ml-2">
+                        {(a||b) ? `(Team ${a||"?"} vs Team ${b||"?"})` : "(Unassigned teams)"
+                        }
+                      </span>
                       {g.gtime && <span className="ml-3">{g.gtime}</span>}
                       {g.location?<span className="ml-3">• {g.location}</span>:null}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
-                      <span className={`px-2 py-1 rounded text-xs ${w.startsWith("Team")?"bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>Winner: {w}</span>
+                      <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} - {g.score_b}</span>
+                      {decided && (
+                        <span className="px-2 py-1 rounded text-xs bg-emerald-100 text-emerald-700">
+                          Winner: Team {outcome.winner}
+                        </span>
+                      )}
                       <div className="flex gap-2">
                         <button className="h-10 px-3 rounded-lg bg-yellow-500 text-white active:scale-[.99]" onClick={()=>requestEditGame(g)} disabled={viewDate!=="LIVE"}>Edit</button>
                         <button className="h-10 px-3 rounded-lg bg-red-500 text-white active:scale-[.99]" onClick={()=>deleteGame(g.id)} disabled={viewDate!=="LIVE"}>Delete</button>
@@ -1049,7 +1051,7 @@ function PublicBoard(){
         {!loading && err && <div className="mb-4 text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2">{err}</div>}
 
         <div className="bg-white rounded-2xl shadow-sm border p-4 sm:p-6 mb-6">
-          {/* Title restyled: white text, maroon background, bold */}
+          {/* Title: white text, maroon background, bold */}
           <h3 className="mb-3 inline-block font-bold text-white bg-[#800000] px-3 py-1 rounded">
             Game Schedule
           </h3>
@@ -1058,21 +1060,24 @@ function PublicBoard(){
             <div className="space-y-3">
               {games.map((g,idx)=>{
                 const a=g.team_a?.trim(), b=g.team_b?.trim();
+                const decided = hasFinalWinner(g);
+                const outcome = decided ? getOutcome(g) : null;
                 const rosterA=(teams[a]||[]), rosterB=(teams[b]||[]);
-                const w=winnerLabel(g);
                 return (
                   <div key={g.id||idx} className="border rounded-2xl p-4">
                     <div className="flex flex-col md:flex-row md:items-center gap-2 mb-2">
-                      <div className="font-semibold min-w-24">{g.title||`Game ${idx+1}`}</div>
+                      {/* One-liner header */}
                       <div className="text-sm text-gray-700 flex-1">
-                        {(a||b)?<span>Team {a||"?"} vs Team {b||"?"}</span>:<span className="text-gray-400">Unassigned teams</span>}
-                        {/* TIME only (date removed) */}
+                        <span className="font-semibold">{g.title||`Game ${idx+1}`}</span>
+                        <span className="ml-2">
+                          {(a||b) ? `(Team ${a||"?"} vs Team ${b||"?"})` : "(Unassigned teams)"}
+                        </span>
                         {g.gtime && <span className="ml-3">{g.gtime}</span>}
                         {g.location && <span className="ml-3">• {g.location}</span>}
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} — {g.score_b}</span>
-                        <span className={`px-2 py-1 rounded text-xs ${w.startsWith("Team")?"bg-emerald-100 text-emerald-700":"bg-slate-100 text-slate-700"}`}>Winner: {w}</span>
+                        <span className="px-2 py-1 rounded bg-slate-100 text-sm">Score: {g.score_a} - {g.score_b}</span>
+                        {decided && <span className="px-2 py-1 rounded text-xs bg-emerald-100 text-emerald-700">Winner: Team {outcome.winner}</span>}
                       </div>
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
